@@ -1,0 +1,16 @@
+name = "PopulationData"
+uuid = "d4e5f6a7-b8c9-0123-defa-456789012345"
+authors = ["PopulationData Contributors"]
+version = "0.1.0"
+
+[deps]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00e"
+DataFrames = "a93c6f00-e57d-5684-b466-afe8fa294f38"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+GeoDataFrames = "62cb38b5-d8d2-4862-a48e-6a340996859f"
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+Rasters = "700a0f68-0e07-4f34-ffe2-9db9f3c31d29"
+
+[compat]
+julia = "1.9"
