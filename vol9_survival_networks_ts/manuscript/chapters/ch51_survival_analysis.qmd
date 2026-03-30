@@ -1,0 +1,237 @@
+---
+title: "Chapter 51: Survival Analysis — Estimating and Comparing Time-to-Event"
+author: "Open Healthcare Textbook"
+format:
+  html:
+    code-fold: false
+    toc: true
+  pdf:
+    toc: true
+julia: true
+---
+
+# Chapter 51: Survival Analysis
+
+## Learning Objectives
+
+By the end of this chapter you will be able to:
+
+- Construct and interpret Kaplan-Meier survival curves with confidence intervals
+- Apply the log-rank test to compare survival distributions across groups
+- Fit and interpret Cox proportional hazards models
+- Estimate parametric AFT models (Weibull, exponential, log-logistic)
+- Analyse competing-risks data using the cumulative incidence function and Fine-Gray model
+
+## 51.1 Background: Censoring and the Survival Function
+
+Let $T$ denote the time to an event of interest (readmission, death,
+treatment access). We observe:
+
+$$\tilde{T}_i = \min(T_i, C_i), \quad \delta_i = \mathbf{1}(T_i \leq C_i)$$
+
+where $C_i$ is the censoring time. The survival function is:
+
+$$S(t) = P(T > t) = 1 - F(t)$$
+
+The hazard function (instantaneous event rate given survival to $t$):
+
+$$h(t) = \lim_{\Delta t \to 0} \frac{P(t \leq T < t + \Delta t \mid T \geq t)}{\Delta t}
+       = \frac{f(t)}{S(t)}$$
+
+The cumulative hazard $H(t) = \int_0^t h(u)\,du$ satisfies $S(t) = e^{-H(t)}$.
+
+## 51.2 Kaplan-Meier Estimator
+
+The nonparametric Kaplan-Meier (1958) estimator uses the product-limit formula:
+
+$$\hat{S}(t) = \prod_{t_i \leq t} \left(1 - \frac{d_i}{r_i}\right)$$
+
+where $d_i$ = deaths at time $t_i$, $r_i$ = subjects at risk just before $t_i$.
+
+### 51.2.1 Greenwood's Variance Formula
+
+$$\widehat{\text{Var}}[\hat{S}(t)] = \hat{S}(t)^2 \sum_{t_i \leq t} \frac{d_i}{r_i(r_i - d_i)}$$
+
+Log-log transformed confidence intervals (better coverage near 0 and 1):
+
+$$\text{CI}: \hat{S}(t)^{\exp(\pm z_{\alpha/2} \hat{\sigma}_{\log(-\log \hat{S})})}$$
+
+### 51.2.2 Restricted Mean Survival Time
+
+$$\text{RMST}(\tau) = \int_0^{\tau} \hat{S}(t)\,dt \approx \sum_i \hat{S}(t_i)(t_{i+1} - t_i)$$
+
+```julia
+using Statistics
+include("packages/SurvivalAnalysis/src/SurvivalAnalysis.jl")
+using .SurvivalAnalysis
+
+# North Dakota 30-day readmission cohort
+rng  = MersenneTwister(42)
+n    = 300
+t    = -log.(rand(rng, n)) .* 45.0
+c    = rand(rng, n) .* 90.0
+obs  = min.(t, c); st = Int.(t .<= c)
+groups = repeat(["rural", "urban"], 150)
+
+km_all   = kaplan_meier(obs, st)
+km_rural = kaplan_meier(obs[groups .== "rural"], st[groups .== "rural"])
+km_urban = kaplan_meier(obs[groups .== "urban"], st[groups .== "urban"])
+
+println("Median survival (overall): ", round(km_all.median_survival, digits=1), " days")
+println("Median survival (rural):   ", round(km_rural.median_survival, digits=1), " days")
+println("Median survival (urban):   ", round(km_urban.median_survival, digits=1), " days")
+println("RMST (overall):            ", round(km_all.restricted_mean, digits=2), " days")
+```
+
+## 51.3 Nelson-Aalen Cumulative Hazard
+
+The Nelson-Aalen estimator of the cumulative hazard:
+
+$$\hat{H}(t) = \sum_{t_i \leq t} \frac{d_i}{r_i}$$
+
+The implied survival estimate $\hat{S}^{NA}(t) = \exp(-\hat{H}(t))$
+is slightly less biased than the KM estimator for small samples.
+
+## 51.4 Log-Rank Test
+
+The Mantel-Cox log-rank test statistic for $k$ groups:
+
+$$\chi^2 = \sum_{g=1}^{k} \frac{(O_g - E_g)^2}{E_g}$$
+
+where the expected count at each event time is:
+
+$$E_g(t_i) = d_i \cdot \frac{r_g(t_i)}{r(t_i)}$$
+
+Under $H_0$: $S_1(t) = S_2(t) = \ldots$, $\chi^2 \sim \chi^2(k-1)$.
+
+The Peto-Peto (Wilcoxon) variant weights each event time by $r(t_i)$,
+giving greater weight to early differences.
+
+```julia
+lr = logrank_test(obs, st, groups)
+println("Log-rank χ²($(lr.df)) = ", round(lr.statistic, digits=3),
+        "  p = ", round(lr.p_value, digits=4))
+```
+
+## 51.5 Cox Proportional Hazards Model
+
+The Cox (1972) model specifies:
+
+$$h(t \mid \mathbf{x}) = h_0(t) \exp(\mathbf{x}'\boldsymbol{\beta})$$
+
+The **partial likelihood** eliminates the baseline hazard $h_0(t)$:
+
+$$\ell_p(\boldsymbol{\beta}) = \sum_{i:\delta_i=1} \left[
+  \mathbf{x}_i'\boldsymbol{\beta} - \log \sum_{j \in \mathcal{R}(t_i)} \exp(\mathbf{x}_j'\boldsymbol{\beta})
+\right]$$
+
+where $\mathcal{R}(t)$ is the risk set at time $t$. Maximised by Newton-Raphson:
+
+$$\boldsymbol{\beta}^{(m+1)} = \boldsymbol{\beta}^{(m)} - \left[\mathbf{H}(\boldsymbol{\beta}^{(m)})\right]^{-1} \nabla \ell_p(\boldsymbol{\beta}^{(m)})$$
+
+The **Breslow** baseline hazard estimate:
+
+$$\hat{H}_0(t) = \sum_{t_i \leq t} \frac{d_i}{\sum_{j \in \mathcal{R}(t_i)} \exp(\mathbf{x}_j'\hat{\boldsymbol{\beta}})}$$
+
+**Harrell's C-statistic**: proportion of concordant pairs $(i,j)$ where
+$\hat{h}(i) > \hat{h}(j)$ whenever $T_i < T_j$ and $\delta_i = 1$.
+
+```julia
+X = randn(rng, n, 3)  # age, poverty, rural
+m = cox_fit(obs, st, X; feature_names=["age","poverty","rural"])
+println("Concordance C: ", round(m.concordance, digits=3))
+println("Converged: ", m.converged)
+for i in 1:3
+    println("  $(m.feature_names[i]): HR=$(round(exp(m.β[i]),digits=3)) p=$(round(m.p_values[i],digits=4))")
+end
+```
+
+## 51.6 Parametric AFT Models
+
+The accelerated failure time (AFT) parameterisation:
+
+$$\log T = \mathbf{x}'\boldsymbol{\beta} + \sigma \varepsilon$$
+
+where $\varepsilon$ follows a distribution specific to each model family.
+
+| Model | Distribution of $T$ | Hazard shape |
+|-------|---------------------|--------------|
+| Weibull | $T = \exp(\mathbf{x}'\boldsymbol{\beta})\cdot W$ | Monotone |
+| Exponential | $T \sim \text{Exp}(e^{-\mathbf{x}'\boldsymbol{\beta}})$ | Constant |
+| Log-logistic | $T = \exp(\mathbf{x}'\boldsymbol{\beta})\cdot L$ | Unimodal |
+
+For the Weibull AFT, the log-likelihood contributions are:
+
+$$\text{Event}: -\log\sigma - \log t_i + w_i - e^{w_i}$$
+$$\text{Censor}: -e^{w_i}$$
+
+where $w_i = (\log t_i - \mathbf{x}_i'\boldsymbol{\beta})/\sigma$ is the
+standardised Gumbel residual. AIC selects among competing distributions.
+
+```julia
+pm = parametric_fit(obs, st, X; dist=:weibull, feature_names=["age","pov","rural"])
+println("Weibull AIC: ", round(pm.aic, digits=1))
+q  = parametric_predict(pm, X[1:3,:])
+println("Predicted medians: ", round.(q[:q50], digits=1), " days")
+```
+
+## 51.7 Competing Risks
+
+When subjects can experience multiple event types (readmission vs. death),
+standard KM is **inappropriate** — it overestimates the event probability.
+
+### 51.7.1 Cumulative Incidence Function
+
+$$\hat{F}_k(t) = \sum_{t_i \leq t} \hat{S}(t_i^-) \cdot \frac{d_k(t_i)}{r(t_i)}$$
+
+where $\hat{S}(t_i^-)$ is the overall KM survival just before $t_i$.
+Note: $\sum_k \hat{F}_k(t) + \hat{S}(t) = 1$.
+
+### 51.7.2 Fine-Gray Subdistribution Hazard
+
+Fine and Gray (1999) define the subdistribution hazard:
+
+$$h_k^*(t) = -\frac{d \log(1 - F_k(t))}{dt}$$
+
+Modelled as $h_k^*(t \mid \mathbf{x}) = h_{0k}^*(t)\exp(\mathbf{x}'\boldsymbol{\gamma}_k)$.
+
+Interpretation: $\exp(\gamma_{kj})$ is the subdistribution hazard ratio —
+effect on the CIF including the competing event risk.
+
+```julia
+# Create competing risks data (status: 0=censored, 1=readmit, 2=death)
+comp_st = zeros(Int, n)
+t2 = -log.(rand(rng, n)) .* 150
+for i in 1:n
+    if t[i] <= c[i] && t[i] <= t2[i]; comp_st[i] = 1
+    elseif t2[i] < c[i] && t2[i] < t[i]; comp_st[i] = 2
+    end
+    obs[i] = min(t[i], t2[i], c[i])
+end
+
+cif = cumulative_incidence(obs, comp_st)
+println("CIF readmission at 30d: ", round(100*cif_at(cif, 1, 30.0), digits=1), "%")
+println("CIF death at 30d:       ", round(100*cif_at(cif, 2, 30.0), digits=1), "%")
+```
+
+## 51.8 Model Selection
+
+| Criterion | Formula | Lower is better |
+|-----------|---------|-----------------|
+| AIC | $-2\ell + 2k$ | ✓ |
+| BIC | $-2\ell + k\log n$ | ✓ |
+| Concordance C | (higher) | — |
+| Integrated Brier score | $\int_0^{\tau}\text{BS}(t)dt/\tau$ | ✓ |
+
+## 51.9 Exercises
+
+1. **KM with time-varying covariates**: Compute the KM curve for rural
+   patients under 65 vs. 65+ and test for differences.
+2. **Cox model**: Which covariate has the largest effect on readmission
+   hazard? Interpret the hazard ratio in clinical terms.
+3. **Weibull vs. Exponential**: Use AIC to determine whether the Weibull
+   shape parameter is significantly different from 1.
+4. **Competing risks**: Why does the KM estimate of readmission risk
+   overestimate the CIF? When does this bias matter clinically?
+5. **Fine-Gray**: Fit a Fine-Gray model for cause 1. How does poverty affect
+   the subdistribution hazard ratio, controlling for age?
