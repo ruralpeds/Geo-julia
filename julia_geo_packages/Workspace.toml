@@ -1,0 +1,10 @@
+# Vol 3: Production Julia Geospatial Packages
+# Julia General Registry-quality packages for the geospatial health analytics ecosystem.
+
+[workspace]
+packages = [
+    "packages/SpatialStats",
+    "packages/Geocode",
+    "packages/MapClassify",
+    "packages/Overpass",
+]
