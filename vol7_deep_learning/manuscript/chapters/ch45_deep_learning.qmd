@@ -1,0 +1,220 @@
+---
+title: "Chapter 45: Deep Learning for Healthcare Access Prediction"
+subtitle: "Neural Networks, Graph Learning, and Attention Mechanisms"
+---
+
+# Chapter 45: Deep Learning for Healthcare Access Prediction
+
+> "Deep learning has transformed machine perception.
+> For healthcare, the frontier is learning from sparse, heterogeneous,
+> and geographically structured data."
+> — LeCun, Bengio & Hinton (2015)
+
+## 45.1 Why Deep Learning for Healthcare GIS?
+
+Traditional models (OLS, GP, gradient boosting) excel with well-structured
+tabular features.  Deep learning adds three capabilities that matter for
+healthcare access analysis:
+
+1. **Feature interaction learning**: Automatically discover which combinations
+   of poverty rate × rurality × insurance coverage predict access deserts.
+2. **Graph structure utilisation**: Provider referral networks have topology
+   (clustering, centrality) that MLP encoders can exploit.
+3. **Uncertainty-aware prediction**: Dropout-based Bayesian neural networks
+   quantify epistemic uncertainty from small county-level samples.
+
+**When to use deep learning vs. simpler models**:
+
+| Condition | Recommended |
+|-----------|-------------|
+| n < 500, low-dimensional features | GP or GBM (Vols 4–6) |
+| Structured spatial data, interpretability required | GP + SHAP (Vol 4/5) |
+| n > 5,000, feature interactions important | MLP or TabNet |
+| Graph-structured referral network | GNN |
+| Uncertainty quantification needed | Bayesian NN or GP |
+
+## 45.2 Network Architecture
+
+### 45.2.1 Multi-Layer Perceptron (MLP)
+
+The standard workhorse for tabular healthcare data:
+
+```julia
+using DeepHealth
+
+# Access predictor: 12 input features → 3 hidden layers → 1 output
+net = build_mlp(12, [64, 32, 16], 1;
+                activation    = :relu,
+                use_bn        = true,    # batch normalisation
+                dropout_p     = 0.1,     # 10% dropout for regularisation
+                out_activation = :identity)
+
+println("Parameters: $(n_params(net))")
+# Forward pass: features × batch
+X_batch = randn(12, 32)
+ŷ = forward(net, X_batch)
+```
+
+**Batch normalisation** stabilises training by normalising each layer's
+pre-activations:
+
+$$\hat{x}_i = \frac{x_i - \mu_\mathcal{B}}{\sqrt{\sigma^2_\mathcal{B} + \varepsilon}} \cdot \gamma + \beta$$
+
+Running statistics (EMA) are maintained for inference-time normalisation.
+
+### 45.2.2 Adam Optimiser
+
+$$m_t = \beta_1 m_{t-1} + (1-\beta_1) g_t$$
+$$v_t = \beta_2 v_{t-1} + (1-\beta_2) g_t^2$$
+$$\theta_t = \theta_{t-1} - \alpha \cdot \hat{m}_t / (\sqrt{\hat{v}_t} + \varepsilon)$$
+
+Bias correction: $\hat{m}_t = m_t/(1-\beta_1^t)$.  Default: $\alpha=10^{-3}$,
+$\beta_1=0.9$, $\beta_2=0.999$.
+
+### 45.2.3 Training Loop
+
+```julia
+# Full training with early stopping and cosine LR schedule
+ap = AccessPredictor(12; hidden=[64, 32, 16])
+ap_trained = fit!(ap, X_train, y_train;
+                   n_epochs   = 300,
+                   batch_size = 32,
+                   lr         = 1e-3,
+                   val_frac   = 0.15)
+
+# Evaluate on holdout
+ŷ_test = predict_access(ap_trained, X_test)
+metrics = evaluate_model(ap_trained.net, X_test', reshape(y_test, 1, :))
+println("Test RMSE: $(round(metrics.rmse; digits=4))")
+println("Test R²:   $(round(metrics.r2; digits=3))")
+```
+
+**Cosine learning rate schedule** (Loshchilov & Hutter 2017):
+
+$$\eta_t = \eta_{\min} + \frac{1}{2}(\eta_{\max} - \eta_{\min})\left(1 + \cos\frac{\pi t}{T}\right)$$
+
+## 45.3 Graph Neural Networks for Referral Networks
+
+Provider referral networks are naturally graph-structured.
+A **Graph Convolutional Network (GCN)** layer performs:
+
+$$H^{(l+1)} = \sigma\!\left(D^{-1}\tilde{A} H^{(l)} W^{(l)}\right)$$
+
+where $\tilde{A} = A + I$ adds self-loops and $D^{-1}$ row-normalises.
+
+```julia
+# Referral network: 30 providers, 4 node features (PageRank, HHI, load, specialty)
+H = randn(4, 30)    # feature matrix: features × nodes
+A = Float64.(rand(30, 30) .> 0.8)  # sparse adjacency
+
+gnn = build_gnn(4, [16, 8], 2;   # 2 outputs: access score + capacity
+                activation = :relu)
+out = forward(gnn, H, A)          # 2 × 30
+
+println("Node predictions shape: $(size(out))")
+println("Example provider access: $(round.(out[:, 1]; digits=3))")
+```
+
+### Message Passing Intuition
+
+Each iteration aggregates information from immediate neighbours.  After L
+layers, a node's representation integrates L-hop neighbourhood context.
+For healthcare access: a provider's effective load depends on its referral
+partners' loads — exactly what multi-hop GNN captures.
+
+## 45.4 TabNet for Feature Selection
+
+In healthcare data, many features are irrelevant or redundant.  **TabNet**
+(Arik & Pfister 2019) learns sequential sparse attention masks:
+
+$$M^{(n)}_t = \text{sparsemax}\left(h^{(n)}_{B,t} \odot P^{(n-1)}_t\right)$$
+
+where $P^{(n)}_t = \prod_{n'<n}(\gamma - M^{(n')}_t)$ penalises feature reuse.
+
+```julia
+tb = TabNetBlock(20, 8; n_steps=3, gamma=1.3)
+X  = randn(20, 64)    # 20 features, 64 patients
+out = forward(tb, X)  # 8 × 64 learned representation
+println("Feature selection output: $(size(out))")
+```
+
+## 45.5 Clinical Models
+
+### Readmission Risk Classifier
+
+```julia
+# 30-day readmission: binary classification
+rr = ReadmissionRisk(15;
+                      hidden=[128, 64, 32],
+                      threshold=0.35)   # lower threshold → higher recall
+
+rr_trained = fit!(rr, X_clinical, y_readmit;
+                   n_epochs=200, lr=5e-4)
+probs, labels = predict_readmission(rr_trained, X_test_clinical)
+
+auc = evaluate_model(rr_trained.net, X_test_clinical', reshape(Float64.(y_test), 1, :);
+                      task=:classification).auc
+println("AUC-ROC: $(round(auc; digits=3))")
+```
+
+### Sepsis Early Warning
+
+```julia
+# Build feature vector from SOFA components
+features = sofa_features(;
+    hr=115.0, rr=24.0, map_val=62.0,
+    temp=38.9, spo2=94.0,
+    creatinine=2.1, bilirubin=1.8, platelets=95.0,
+    Δhr=8.0, Δrr=3.0, Δmap=-12.0
+)
+
+sa = SepsisAlert(11; alert_threshold=0.25, sensitivity_bias=0.15)
+sa.μ .= 0.5; sa.σ .= 0.5   # dummy standardisation for demo
+X_sofa = reshape(features, 11, 1)
+scores, alerts, severity = alert_sepsis(sa, X_sofa)
+println("Risk score: $(round(scores[1]; digits=3))")
+println("Severity:   $(severity[1])")
+```
+
+## 45.6 Model Reporting and Interpretability
+
+```julia
+# Comprehensive report with permutation importance
+report = deep_health_report(ap_trained.net, X_train', y_train;
+                              feature_names = feature_names,
+                              task = :regression,
+                              name = "AccessPredictor v1.2",
+                              n_perm = 50)
+println(report)
+
+# Training curve DataFrame for plotting
+history_df = training_summary(ap_trained.history)
+# Plot: history_df.epoch vs history_df.train_loss, history_df.val_loss
+```
+
+**Permutation importance** (Breiman 2001):
+For feature $j$, shuffle column $j$ and measure loss increase:
+$\text{imp}_j = \mathbb{E}[\mathcal{L}(f, X_{\sigma_j}) - \mathcal{L}(f, X)]$
+
+## 45.7 Comparison: ML Algorithm Selection Guide
+
+| Scenario | Vol | Method | Typical RMSE | Training time |
+|----------|-----|--------|-------------|--------------|
+| County-level regression, n=53 | 5 | GP Matérn 3/2 | 0.0008–0.002 | < 1s |
+| County-level regression, n=53 | 5 | Random Forest | 0.001–0.003 | < 1s |
+| Tract-level, n=2400 | 7 | MLP (3 layers) | 0.002–0.005 | 10–60s |
+| Referral graph nodes | 7 | GNN | task-dependent | 30–120s |
+| Readmission (clinical) | 7 | ReadmissionRisk | AUC 0.72–0.82 | 30–90s |
+
+## References
+
+- LeCun, Y., Bengio, Y., & Hinton, G. (2015). Deep learning. *Nature*, 521, 436–444.
+- Kingma, D. P., & Ba, J. (2014). Adam: A method for stochastic optimization. arXiv:1412.6980.
+- Arik, S. Ö., & Pfister, T. (2021). TabNet: Attentive interpretable tabular learning.
+  *AAAI*, 35(8), 6679–6687.
+- Loshchilov, I., & Hutter, F. (2017). SGDR: Stochastic gradient descent with
+  warm restarts. *ICLR 2017*.
+- Kipf, T., & Welling, M. (2017). Semi-supervised classification with graph
+  convolutional networks. *ICLR 2017*.
+- Singer, M., et al. (2016). The third international consensus definitions for
+  sepsis and septic shock (Sepsis-3). *JAMA*, 315(8), 801–810.
