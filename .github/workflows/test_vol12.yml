@@ -1,0 +1,120 @@
+name: Vol 12 — Health Optimization
+
+on:
+  push:
+    paths:
+      - 'vol12_health_optimization/**'
+      - '.github/workflows/test_vol12.yml'
+  pull_request:
+    paths:
+      - 'vol12_health_optimization/**'
+      - '.github/workflows/test_vol12.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: vol12_health_optimization
+
+jobs:
+  # ── Job 1: FacilityLocation package ────────────────────────────────────────
+  test-facilitylocation:
+    name: FacilityLocation.jl (${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run FacilityLocation tests
+        run: |
+          julia --project=packages/FacilityLocation \
+            -e "using Pkg; Pkg.instantiate(); include(\"packages/FacilityLocation/test/runtests.jl\")"
+
+  # ── Job 2: HealthRouting package ───────────────────────────────────────────
+  test-healthrouting:
+    name: HealthRouting.jl (${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run HealthRouting tests
+        run: |
+          julia --project=packages/HealthRouting \
+            -e "using Pkg; Pkg.instantiate(); include(\"packages/HealthRouting/test/runtests.jl\")"
+
+  # ── Job 3: ResourceAllocation package ─────────────────────────────────────
+  test-resourceallocation:
+    name: ResourceAllocation.jl (${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run ResourceAllocation tests
+        run: |
+          julia --project=packages/ResourceAllocation \
+            -e "using Pkg; Pkg.instantiate(); include(\"packages/ResourceAllocation/test/runtests.jl\")"
+
+  # ── Job 4: Integration tests ───────────────────────────────────────────────
+  test-integration:
+    name: Integration Tests (${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    needs: [test-facilitylocation, test-healthrouting, test-resourceallocation]
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run integration tests
+        run: |
+          julia --project=. \
+            -e "using Pkg; Pkg.instantiate(); include(\"test/integration_test.jl\")"
+
+  # ── Job 5: Vol 12 status ───────────────────────────────────────────────────
+  vol12-status:
+    name: Vol 12 Status
+    runs-on: ubuntu-latest
+    needs: [test-facilitylocation, test-healthrouting, test-resourceallocation, test-integration]
+    if: always()
+    steps:
+      - name: Check all jobs
+        run: |
+          echo "FacilityLocation : ${{ needs.test-facilitylocation.result }}"
+          echo "HealthRouting    : ${{ needs.test-healthrouting.result }}"
+          echo "ResourceAlloc    : ${{ needs.test-resourceallocation.result }}"
+          echo "Integration      : ${{ needs.test-integration.result }}"
+          if [[ "${{ needs.test-facilitylocation.result }}" == "success" && \
+                "${{ needs.test-healthrouting.result }}"   == "success" && \
+                "${{ needs.test-resourceallocation.result }}" == "success" && \
+                "${{ needs.test-integration.result }}"     == "success" ]]; then
+            echo "✓ Vol 12 — All tests passed"
+          else
+            echo "✗ Vol 12 — One or more jobs failed"
+            exit 1
+          fi

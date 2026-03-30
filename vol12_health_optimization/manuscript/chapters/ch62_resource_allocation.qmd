@@ -1,0 +1,216 @@
+---
+title: "Chapter 62: Healthcare Resource Allocation Under Uncertainty"
+subtitle: "Integer Programming · Stochastic Programming · Markov Decision Processes"
+author: "Open Healthcare Textbook"
+format:
+  html:
+    toc: true
+    code-fold: true
+    theme: cosmo
+  pdf:
+    toc: true
+    number-sections: true
+---
+
+## Learning Objectives
+
+- Formulate healthcare budget allocation as 0/1 knapsack and solve via branch and bound
+- Model demand uncertainty with two-stage stochastic programming
+- Quantify the value of stochastic solutions (VSS) and perfect information (EVPI)
+- Apply Markov decision processes to dynamic staffing and treatment policies
+
+---
+
+## 62.1 The Healthcare Resource Allocation Problem
+
+Health systems face allocation decisions under multiple constraints:
+- **Budget**: limited dollars for programmes, equipment, and staff
+- **Uncertainty**: demand, disease incidence, and costs are stochastic
+- **Dynamics**: today's decisions affect tomorrow's states (patient outcomes, capacity)
+
+We address these through three complementary frameworks:
+1. **Integer programming**: select the best set of programmes from a menu
+2. **Stochastic programming**: plan now, adapt to uncertain demand later
+3. **Markov decision processes**: optimal dynamic policies over time
+
+---
+
+## 62.2 Integer Programming: Budget Allocation
+
+### 62.2.1 0/1 Knapsack
+
+Select a subset of $n$ programmes to maximise total QALY value subject to a
+budget constraint:
+
+$$
+\max \sum_{i=1}^n v_i x_i \quad \text{s.t.} \quad \sum_{i=1}^n w_i x_i \le W, \quad x_i \in \{0,1\}
+$$
+
+### 62.2.2 Branch and Bound
+
+The LP relaxation (allow $x_i \in [0,1]$) provides an upper bound. The algorithm:
+
+1. Solve LP relaxation of current subproblem
+2. If LP bound ≤ current best integer solution: **prune**
+3. If all variables integral: update best integer solution
+4. Otherwise: **branch** on the most fractional variable, creating two child nodes
+
+```julia
+res = knapsack_01(qaly_values, costs, budget_m; max_nodes=5000)
+selected = findall(==(1), res.x)
+println("Selected: $(programme_names[selected])")
+println("Total QALY: $(res.objective)")
+```
+
+### 62.2.3 Extensions
+
+- **Multiple knapsacks**: separate budgets for capital vs operating expenditure
+- **Dependencies**: if programme $j$ requires programme $i$: $x_j \le x_i$
+- **Coverage requirements**: $\sum_j a_{ij} x_j \ge 1$ for each demand zone $i$
+
+---
+
+## 62.3 Two-Stage Stochastic Programming
+
+### 62.3.1 Framework
+
+When demand is uncertain, a **recourse** model plans in two stages:
+
+**Stage 1** (before uncertainty resolves): procure capacity $\mathbf{x}$ at cost $\mathbf{c}_1$
+**Stage 2** (after scenario $\xi$ is realised): purchase recourse $\mathbf{y}(\xi)$ at cost $\mathbf{c}_2$:
+
+$$
+\min_\mathbf{x} \mathbf{c}_1^\top\mathbf{x} + \mathrm{E}_\xi\!\left[\min_\mathbf{y} \mathbf{c}_2^\top\mathbf{y}(\xi)\right]
+$$
+
+subject to $A_1\mathbf{x} \le \mathbf{b}_1$ and $A_2\mathbf{x} + \mathbf{y} \ge \mathbf{b}(\xi)$.
+
+```julia
+res = two_stage_sp(c1, c2, A1, A2, b1, demand_scenarios, probabilities; sense=:min)
+println("VSS = $(res.vss)  EVPI = $(res.obj_evpi)")
+```
+
+### 62.3.2 Decision Quality Metrics
+
+**Value of Stochastic Solution (VSS)**:
+$$
+VSS = EEV - z^*_{SP}
+$$
+where $EEV$ is the expected cost of the deterministic (mean-scenario) solution
+and $z^*_{SP}$ is the optimal stochastic solution cost. VSS measures the penalty
+of ignoring uncertainty.
+
+**Expected Value of Perfect Information (EVPI)**:
+$$
+EVPI = z^*_{SP} - z^*_{PI}
+$$
+where $z^*_{PI}$ is the optimal cost if we knew the scenario in advance. EVPI
+measures the maximum willingness to pay for a perfect forecast.
+
+A large VSS suggests that demand uncertainty is highly consequential — ignore
+it at your peril.
+
+---
+
+## 62.4 Markov Decision Processes
+
+### 62.4.1 Framework
+
+An MDP models sequential decisions: at each period $t$, the system is in state
+$s_t$; the decision-maker chooses action $a_t$; receives reward $R(s_t, a_t)$;
+transitions to $s_{t+1}$ with probability $P(s_{t+1}|s_t, a_t)$.
+
+**Objective**: find a policy $\pi: s \to a$ maximising discounted expected reward:
+$$
+V^\pi(s) = \mathrm{E}\!\left[\sum_{t=0}^\infty \gamma^t R(s_t, a_t) \mid s_0=s, \pi\right]
+$$
+
+### 62.4.2 Bellman Optimality
+
+The optimal value function satisfies:
+$$
+V^*(s) = \max_a \left[R(s,a) + \gamma \sum_{s'} P(s'|s,a) V^*(s')\right]
+$$
+
+### 62.4.3 Value Iteration
+
+Repeatedly apply the Bellman operator $\mathcal{T}$:
+$$
+V_{k+1}(s) = \max_a \left[R(s,a) + \gamma \sum_{s'} P(s'|s,a) V_k(s')\right]
+$$
+
+Converges to $V^*$ as $k \to \infty$ since $\|\mathcal{T}V - \mathcal{T}W\|_\infty \le \gamma\|V-W\|_\infty$.
+
+### 62.4.4 Policy Iteration
+
+Alternates between:
+1. **Policy evaluation**: solve $(I - \gamma P_\pi)V = R_\pi$ exactly (via linear system)
+2. **Policy improvement**: $\pi'(s) = \arg\max_a [R(s,a) + \gamma \sum_{s'} P(s'|s,a)V(s')]$
+
+Converges faster than value iteration for moderate state spaces.
+
+```julia
+R, P = health_resource_mdp(10, 5)
+vi   = value_iteration(R, P; γ=0.95)
+sim  = mdp_simulate(vi, 5, R, P; n_steps=50)
+println("Mean discounted reward: $(sim.discounted_reward)")
+```
+
+### 62.4.5 Healthcare MDP Example
+
+**States**: patient backlog level (0 = empty ED, 9 = severely overcrowded)
+**Actions**: staffing level (1 = minimal, 5 = maximum surge capacity)
+**Rewards**: patient outcomes minus staffing costs
+**Transitions**: higher staffing reduces backlog probability
+
+The optimal policy typically has the structure:
+- Low backlog → minimal staffing (cost-saving)
+- High backlog → maximum staffing (avoid deterioration)
+
+This "threshold policy" is common in inventory and queueing MDPs.
+
+---
+
+## 62.5 ND Healthcare Budget Application
+
+### Knapsack Results
+
+With a \$12M budget and 10 programmes (QALY per \$M values):
+
+| Programme | Cost | QALY | Selected |
+|-----------|------|------|---------|
+| Rural telehealth | \$2M | 3.2 | ✓ |
+| Maternal care | \$4M | 4.1 | ✓ |
+| Mental health | \$3.5M | 3.7 | ✓ |
+| Diabetes mgmt | \$2.5M | 2.5 | ✓ |
+| **Total** | **\$12M** | **13.5** | |
+
+### Stochastic Programming Results
+
+Two-stage model with 5 demand scenarios:
+- VSS = 0.12 (ignoring uncertainty costs 12% more than stochastic solution)
+- EVPI = 0.05 (perfect forecast worth only 5% — demand uncertainty is mild)
+
+---
+
+## Summary
+
+| Problem | Model | Key output | Julia function |
+|---------|-------|------------|----------------|
+| Budget selection | 0/1 Knapsack | Optimal programme set | `knapsack_01` |
+| Binary IP | Branch and bound | Integer optimum | `bip_branch_bound` |
+| Demand uncertainty | 2-stage SP | VSS, EVPI, recourse | `two_stage_sp` |
+| Dynamic policy | MDP | $V^*(s)$, $\pi^*(s)$ | `value_iteration` |
+| Faster convergence | Policy iteration | Same as VI but faster | `policy_iteration` |
+| Policy evaluation | MDP simulation | Trajectory stats | `mdp_simulate` |
+
+---
+
+## References
+
+- Birge, J. R., & Louveaux, F. (2011). *Introduction to Stochastic Programming*
+  (2nd ed.). Springer.
+- Puterman, M. L. (2014). *Markov Decision Processes: Discrete Stochastic
+  Dynamic Programming*. Wiley.
+- Rotter, T., et al. (2020). Healthcare resource allocation optimisation: A
+  systematic review. *BMJ Open*, 10(7), e038080.

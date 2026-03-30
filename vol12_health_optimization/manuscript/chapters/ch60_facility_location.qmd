@@ -1,0 +1,186 @@
+---
+title: "Chapter 60: Healthcare Facility Location"
+subtitle: "p-Median · Set Cover · MCLP · Capacitated FLP"
+author: "Open Healthcare Textbook"
+format:
+  html:
+    toc: true
+    code-fold: true
+    theme: cosmo
+  pdf:
+    toc: true
+    number-sections: true
+---
+
+## Learning Objectives
+
+- Formulate the p-median problem and solve it with greedy and 2-opt heuristics
+- Apply set covering and MCLP to maximise geographic coverage of healthcare services
+- Handle capacity constraints in facility location models
+- Interpret Voronoi catchment areas and equity implications of siting decisions
+
+---
+
+## 60.1 Introduction to Facility Location
+
+The question *"where should we place healthcare facilities to best serve the
+population?"* is one of the oldest problems in operations research, dating to
+Weber's (1909) single-facility minimum transport cost problem.
+
+In a healthcare context:
+- **p-Median**: minimise total weighted travel distance → **efficiency**
+- **Covering models**: ensure every patient is within a threshold distance → **equity**
+- **Capacitated models**: respect facility staffing/bed limits → **feasibility**
+
+---
+
+## 60.2 The p-Median Problem
+
+### 60.2.1 Formulation
+
+Given $n$ demand points with weights $w_i$ and $m$ candidate sites, place $p$
+facilities to minimise total weighted distance:
+
+$$
+\min \sum_{i=1}^n \sum_{j=1}^m w_i d_{ij} x_{ij}
+$$
+$$
+\text{s.t.} \quad \sum_{j=1}^m y_j = p, \quad \sum_{j=1}^m x_{ij} = 1 \;\forall i,
+\quad x_{ij} \le y_j, \quad y_j, x_{ij} \in \{0,1\}
+$$
+
+This is NP-hard but is solvable for moderate $n, m$ via local search.
+
+### 60.2.2 Greedy Initialisation
+
+1. Start with all facilities closed; cost vector $c_i = \infty$ for all demand $i$
+2. At each step, open the candidate $j^*$ that reduces total weighted cost most:
+$$
+j^* = \arg\max_j \sum_{i} w_i [\text{cost}_i - \min(\text{cost}_i, d_{ij})]
+$$
+3. Repeat $p$ times
+
+### 60.2.3 2-opt Facility Swap
+
+Improve the greedy solution by swapping open facilities with closed candidates:
+for each open facility $j$ and closed candidate $k$, tentatively swap and accept
+if the objective decreases. Repeat until no swap improves.
+
+```julia
+res = p_median(demand_pts, cand_pts, 5; weights=population)
+println("Optimal sites: $(res.open_facilities)")
+println("Objective: $(res.objective)")
+```
+
+---
+
+## 60.3 Covering Models
+
+### 60.3.1 Set Covering (Toregas et al. 1971)
+
+Minimise the number of facilities to ensure every demand point is within a
+**coverage radius** $r_0$:
+
+$$
+\min \sum_j y_j \quad \text{s.t.} \quad \sum_j a_{ij} y_j \ge 1 \;\forall i, \quad y_j \in \{0,1\}
+$$
+
+where $a_{ij} = \mathbf{1}(d_{ij} \le r_0)$.
+
+**Greedy algorithm**: repeatedly open the facility covering the most uncovered
+(weighted) demand, until all demand is covered.
+
+### 60.3.2 Maximal Covering (Church & ReVelle 1974)
+
+When it may be impossible to cover all demand with $p$ facilities, maximise
+covered demand:
+
+$$
+\max \sum_i w_i z_i \quad \text{s.t.} \quad \sum_j a_{ij} y_j \ge z_i \;\forall i,
+\quad \sum_j y_j = p, \quad y_j, z_i \in \{0,1\}
+$$
+
+```julia
+mc = mclp(demand_pts, cand_pts, 5; coverage_radius=50.0, weights=population)
+println("Coverage: $(mc.coverage_fraction * 100)% of population")
+```
+
+**Coverage radius guidelines** (rural US):
+- Primary care: 30 km (30-min drive)
+- Emergency services: 15 km (8-min response)
+- Specialist care: 80 km (acceptable travel)
+
+---
+
+## 60.4 Capacitated Facility Location
+
+Real facilities have finite capacity. The **capacitated p-median**:
+
+$$
+\min \sum_i \sum_j w_i d_{ij} x_{ij} \quad \text{s.t.}
+\quad \sum_i w_i x_{ij} \le Q_j y_j \;\forall j
+$$
+
+where $Q_j$ is the capacity of facility $j$.
+
+**Exchange heuristic**: like 2-opt but validates capacity feasibility of each swap.
+
+```julia
+res = cap_flp(demand_pts, cand_pts, 5; weights=pop, capacities=cap_vec)
+println("Feasible: $(res.feasible)")
+println("Capacity used: $(res.capacity_used)")
+```
+
+---
+
+## 60.5 Voronoi Catchment Areas
+
+After siting facilities, assign each demand point to its nearest facility:
+
+$$
+a_i = \arg\min_j d_{ij}, \quad j \in \text{open set}
+$$
+
+The **Voronoi diagram** partitions the service area into catchments. Key metrics:
+- **Catchment population** $= \sum_{i: a_i=j} w_i$
+- **Mean access distance** $= \frac{1}{|C_j|}\sum_{i \in C_j} d_{ij}$
+- **Equity**: Gini coefficient of catchment populations
+
+---
+
+## 60.6 Equity-Efficiency Tradeoffs
+
+The p-median minimises *average* weighted distance — this can concentrate
+facilities near dense populations, leaving rural areas unserved.
+
+| Objective | Favours | Rural bias |
+|-----------|---------|------------|
+| p-Median | Dense urban areas | Under-served |
+| Set cover | All demand equally | Better equity |
+| MCLP | Dense areas (most QALY) | Varies |
+| Capacitated | Balanced loads | Moderate |
+
+**Combined objective**: $\alpha \cdot \text{p-median} + (1-\alpha) \cdot (1 - \text{coverage})$
+
+---
+
+## Summary
+
+| Method | Objective | Key parameter | Julia function |
+|--------|-----------|---------------|----------------|
+| p-Median | Min weighted distance | p (# facilities) | `p_median` |
+| Set cover | Min facilities for full coverage | Coverage radius | `set_cover` |
+| MCLP | Max covered demand | p, coverage radius | `mclp` |
+| Cap FLP | Min distance (capacity-feasible) | p, capacities | `cap_flp` |
+| Voronoi | Assign demand to nearest | — | `catchment_voronoi` |
+
+---
+
+## References
+
+- Church, R., & ReVelle, C. (1974). The maximal covering location problem.
+  *Papers of the Regional Science Association*, 32, 101–118.
+- Hakimi, S. L. (1964). Optimum locations of switching centres and the absolute
+  centres and medians of a graph. *Operations Research*, 12(3), 450–459.
+- Toregas, C., Swain, R., ReVelle, C., & Bergman, L. (1971). The location of
+  emergency service facilities. *Operations Research*, 19(6), 1363–1373.

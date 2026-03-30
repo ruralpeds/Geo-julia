@@ -1,0 +1,211 @@
+---
+title: "Chapter 61: Healthcare Logistics and Emergency Routing"
+subtitle: "TSP · VRP · MEXCLP · Erlang-C Staffing"
+author: "Open Healthcare Textbook"
+format:
+  html:
+    toc: true
+    code-fold: true
+    theme: cosmo
+  pdf:
+    toc: true
+    number-sections: true
+---
+
+## Learning Objectives
+
+- Solve healthcare logistics routing problems with TSP and VRP heuristics
+- Model probabilistic ambulance coverage with MEXCLP
+- Calculate minimum EMS staffing levels using the Erlang-C queuing formula
+- Integrate routing and coverage optimisation for emergency medical services
+
+---
+
+## 61.1 Healthcare Routing Problems
+
+Healthcare logistics encompasses:
+- **Home health visits**: schedule nursing teams across patient homes
+- **Medical supply chains**: route vehicles from distribution centres to clinics
+- **Blood bank logistics**: time-sensitive temperature-controlled deliveries
+- **Mobile health units**: maximise screening coverage per tour
+
+All share the structure of the Travelling Salesman Problem or Vehicle Routing Problem.
+
+---
+
+## 61.2 Travelling Salesman Problem
+
+### 61.2.1 Nearest-Neighbour Heuristic
+
+Start at a depot, repeatedly visit the nearest unvisited location:
+
+```
+tour = [start]
+while unvisited not empty:
+    cur = last(tour)
+    next = argmin_{j ∉ tour} d[cur,j]
+    tour.append(next)
+tour.append(start)  # return to depot
+```
+
+Fast ($O(n^2)$) but typically 20–25% above optimal.
+
+### 61.2.2 2-opt Improvement
+
+Repeatedly reverse sub-tours when this reduces distance:
+
+```
+for i in 1..n-1, j in i+2..n:
+    if d[i,j] + d[i+1,j+1] < d[i,i+1] + d[j,j+1]:
+        reverse tour[i+1..j]
+```
+
+Often reduces distance by 5–15% from nearest-neighbour.
+
+```julia
+nn = tsp_nn(stops)
+to = tsp_two_opt(stops; init_tour=nn.tour)
+println("Improvement: $(round(100 * to.improvement / nn.distance, digits=1))%")
+```
+
+---
+
+## 61.3 Vehicle Routing Problem
+
+### 61.3.1 Clarke-Wright Savings Algorithm
+
+Start with $n$ routes (depot → $i$ → depot). Merge routes by **savings**:
+$$
+S_{ij} = d(\text{depot}, i) + d(\text{depot}, j) - d(i, j)
+$$
+
+Sort savings descending; merge routes ending in $i$ and starting in $j$ if:
+1. Capacity permits: $Q_{r_i} + Q_{r_j} \le C$
+2. $i$ is the last client of its route and $j$ is the first of its route
+
+```julia
+vrp = vrp_cw(clients, depot; demands=demands, capacity=10.0)
+println("$(vrp.n_vehicles) vehicles  total distance $(vrp.total_distance)")
+```
+
+**Optimality gap**: Clarke-Wright solutions are typically 5–15% above optimal
+for moderate instances ($n < 100$).
+
+---
+
+## 61.4 MEXCLP: Maximum Expected Coverage
+
+### 61.4.1 Probabilistic Coverage
+
+Standard MCLP assumes a single ambulance covers a zone. But ambulances are
+often **busy**. If each vehicle is busy with probability $q$ independently:
+
+$$
+P(\text{zone } i \text{ covered} \mid k \text{ vehicles assigned within radius}) = 1 - q^k
+$$
+
+### 61.4.2 MEXCLP Formulation (Daskin 1983)
+
+Maximise expected weighted coverage:
+$$
+\max \sum_i w_i \sum_{k=1}^p (1-q^k)(y_{ik} - y_{i,k-1})
+$$
+
+where $y_{ik}$ = 1 if demand zone $i$ has $k$ or more vehicles within radius.
+
+**Greedy algorithm**: at each step, open the station with maximum marginal
+expected coverage gain:
+$$
+\Delta_j = \sum_{i: a_{ij}=1} w_i [(1-q^{c_i+1}) - (1-q^{c_i})]
+$$
+
+where $c_i$ = current count of covering stations for zone $i$.
+
+```julia
+res = mexclp(demand_pts, station_candidates, 5;
+             coverage_radius=15.0, busy_fraction=0.3)
+println("Expected coverage: $(res.total_expected_coverage * 100)%")
+```
+
+**Busy fraction estimation**: $q \approx \lambda \bar{t} / c$ where $\lambda$
+is call arrival rate, $\bar{t}$ is mean service time, and $c$ is number of
+vehicles at a station.
+
+---
+
+## 61.5 Erlang-C: Minimum Staffing
+
+### 61.5.1 The M/M/c Queue
+
+An EMS dispatch centre models as M/M/c: Poisson arrivals (rate $\lambda$),
+exponential service (rate $\mu$ per server), $c$ parallel servers. Stability
+requires $\rho = \lambda/(c\mu) < 1$.
+
+### 61.5.2 Erlang-C Formula
+
+$$
+C(c, a) = \frac{\frac{a^c}{c!} \cdot \frac{c}{c-a}}
+{\sum_{k=0}^{c-1} \frac{a^k}{k!} + \frac{a^c}{c!} \cdot \frac{c}{c-a}}
+$$
+
+where $a = \lambda/\mu$ (offered traffic in Erlangs). $C(c,a)$ is the
+probability a call must wait.
+
+**Mean waiting time**: $E[W] = C(c,a) / (c\mu - \lambda)$
+
+```julia
+ec = erlang_c(5.0, 1.0, 7; target_pw=0.15)
+println("P(wait) = $(ec.p_wait)")
+println("Minimum servers for P(wait) ≤ 0.15: $(ec.min_servers)")
+```
+
+### 61.5.3 Staffing Rule of Thumb
+
+For a target service level $P(\text{wait}) \le \alpha$:
+
+| $\lambda/\mu$ | $\alpha = 0.1$ | $\alpha = 0.2$ |
+|---------------|----------------|----------------|
+| 2.0 | 4 servers | 3 servers |
+| 5.0 | 8 servers | 7 servers |
+| 10.0 | 14 servers | 13 servers |
+
+---
+
+## 61.6 ND EMS System Application
+
+**Problem**: ND operates 53 county EMS systems. Objective: minimise mean
+response time subject to:
+1. At least 80% of population within 30 km of an ALS station
+2. P(wait) ≤ 0.20 at dispatch centres
+
+```julia
+mexclp_res = mexclp(demand_pts, station_pts, 8; coverage_radius=30.0, busy_fraction=0.25)
+println("Coverage: $(mexclp_res.total_expected_coverage * 100)%")
+
+ec = erlang_c(3.0, 0.5, 8; target_pw=0.20)
+println("Dispatch staffing: $(ec.min_servers) call-takers")
+```
+
+---
+
+## Summary
+
+| Problem | Algorithm | Complexity | Julia function |
+|---------|-----------|------------|----------------|
+| TSP | Nearest-neighbour | $O(n^2)$ | `tsp_nn` |
+| TSP improvement | 2-opt | $O(n^2)$ per iteration | `tsp_two_opt` |
+| CVRP | Clarke-Wright savings | $O(n^2 \log n)$ | `vrp_cw` |
+| EMS coverage | MEXCLP greedy | $O(pnm)$ | `mexclp` |
+| Dispatch | Nearest-available | $O(nm)$ | `dispatch_assignment` |
+| Staffing | Erlang-C | $O(c)$ | `erlang_c` |
+
+---
+
+## References
+
+- Clarke, G., & Wright, J. W. (1964). Scheduling of vehicles from a central
+  depot to a number of delivery points. *Operations Research*, 12(4), 568–581.
+- Daskin, M. S. (1983). A maximum expected covering location model.
+  *Transportation Science*, 17(1), 48–70.
+- Lin, S., & Kernighan, B. W. (1973). An effective heuristic algorithm for the
+  travelling-salesman problem. *Operations Research*, 21(2), 498–516.
