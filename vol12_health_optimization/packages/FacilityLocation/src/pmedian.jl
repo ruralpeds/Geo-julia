@@ -1,5 +1,11 @@
 # pmedian.jl — p-median facility location (Hakimi 1964)
 
+# ── Input validation helpers (inline; no external package dep required) ────────
+_check_2d(m, name) = size(m, 2) == 2 && size(m, 1) > 0 ||
+    error("$(name) must be an n×2 coordinate matrix (got $(size(m)))")
+_check_pos(x, name) = x > 0 ||
+    error("$(name) must be strictly positive (got $(x))")
+
 struct PMedianResult
     open_facilities::Vector{Int}    # indices of open facilities
     assignment::Vector{Int}         # assignment[i] = facility index for demand i
@@ -26,6 +32,17 @@ function p_median(demand_pts::AbstractMatrix,
                   weights::AbstractVector=ones(size(demand_pts,1)),
                   max_iter::Int=500,
                   rng=Random.default_rng())
+    # ── Validate inputs ──────────────────────────────────────────────────────
+    _check_2d(demand_pts, "demand_pts")
+    _check_2d(cand_pts,   "cand_pts")
+    _check_pos(p, "p")
+    _check_pos(max_iter, "max_iter")
+    length(weights) == size(demand_pts, 1) ||
+        error("weights length ($(length(weights))) ≠ number of demand points ($(size(demand_pts,1)))")
+    any(weights .< 0) && error("all weights must be non-negative")
+    !all(isfinite, demand_pts) && error("demand_pts contains NaN or Inf")
+    !all(isfinite, cand_pts)   && error("cand_pts contains NaN or Inf")
+
     n, m = size(demand_pts,1), size(cand_pts,1)
     p    = min(p, m)
 

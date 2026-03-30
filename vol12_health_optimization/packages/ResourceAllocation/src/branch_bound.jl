@@ -1,5 +1,20 @@
 # branch_bound.jl — Binary Integer Programming via branch and bound
 
+# ── Input validation helpers ───────────────────────────────────────────────────
+function _bip_validate(c, A, b; sense, max_nodes)
+    isempty(c) && error("objective vector c must not be empty")
+    size(A, 2) != length(c) &&
+        error("A columns ($(size(A,2))) must equal length(c) ($(length(c)))")
+    size(A, 1) != length(b) &&
+        error("A rows ($(size(A,1))) must equal length(b) ($(length(b)))")
+    sense ∉ (:max, :min) &&
+        error("sense must be :max or :min (got $(sense))")
+    max_nodes < 1 && error("max_nodes must be ≥ 1 (got $(max_nodes))")
+    any(!isfinite, c) && error("objective vector c contains NaN or Inf")
+    any(!isfinite, A) && error("constraint matrix A contains NaN or Inf")
+    any(!isfinite, b) && error("right-hand side b contains NaN or Inf")
+end
+
 struct BIPResult
     x::Vector{Int}              # optimal binary solution
     objective::Float64
@@ -18,6 +33,7 @@ Best for n ≤ 25.
 """
 function bip_branch_bound(c::AbstractVector, A::AbstractMatrix, b::AbstractVector;
                            sense::Symbol=:max, max_nodes::Int=2000)
+    _bip_validate(c, A, b; sense=sense, max_nodes=max_nodes)
     n   = length(c)
     c_s = sense == :max ? c : -c   # convert to maximisation
 

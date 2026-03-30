@@ -1,0 +1,161 @@
+name: Error Handling & Test Framework
+
+on:
+  push:
+    paths:
+      - 'shared/**'
+      - 'tools/**'
+      - '.github/workflows/test_framework.yml'
+      - 'vol10_geostatistics_mapping/packages/**'
+      - 'vol11_causal_inference/packages/**'
+      - 'vol12_health_optimization/packages/**'
+  pull_request:
+    paths:
+      - 'shared/**'
+      - 'tools/**'
+      - '.github/workflows/test_framework.yml'
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ── Job 1: ErrorHandling package ───────────────────────────────────────────
+  test-error-handling:
+    name: ErrorHandling.jl (${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run ErrorHandling tests
+        run: |
+          julia --project=shared/ErrorHandling \
+            -e "using Pkg; Pkg.instantiate(); include(\"shared/ErrorHandling/test/runtests.jl\")"
+
+  # ── Job 2: TestUtils package ───────────────────────────────────────────────
+  test-test-utils:
+    name: TestUtils.jl (${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run TestUtils tests
+        run: |
+          julia --project=shared/TestUtils \
+            -e "using Pkg; Pkg.instantiate(); include(\"shared/TestUtils/test/runtests.jl\")"
+
+  # ── Job 3: Debug runner smoke test ────────────────────────────────────────
+  debug-runner-smoke:
+    name: Debug Runner Smoke (${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    needs: [test-error-handling, test-test-utils]
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run debug runner on shared framework only
+        run: |
+          julia tools/debug_runner.jl \
+            --vol 0 \
+            --fast \
+            --retries 1 \
+            --report tools/ci_debug_report.md \
+            --quiet || true
+          # Always upload report, even on failure
+      - name: Upload debug report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: debug-report-${{ matrix.julia-version }}
+          path: tools/ci_debug_report.md
+          retention-days: 14
+
+  # ── Job 4: Validation retrofit regression check ────────────────────────────
+  validation-retrofit:
+    name: Validation Retrofit (${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    needs: [test-error-handling]
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run Vol 12 package unit tests (with validation guards active)
+        run: |
+          for pkg in FacilityLocation HealthRouting ResourceAllocation; do
+            echo "── Testing $pkg ──"
+            julia --project=vol12_health_optimization/packages/$pkg \
+              -e "using Pkg; Pkg.instantiate(); \
+                  include(\"vol12_health_optimization/packages/$pkg/test/runtests.jl\")"
+          done
+      - name: Verify validation guards fire on bad input
+        run: |
+          julia --project=vol12_health_optimization -e "
+            include(\"vol12_health_optimization/packages/FacilityLocation/src/FacilityLocation.jl\")
+            using .FacilityLocation
+            # Bad dimensions should error
+            try
+                p_median(rand(5,3), 2)   # 3 columns instead of 2
+                error(\"Expected error not raised!\")
+            catch e
+                println(\"✓ Dimension guard fired: \", sprint(showerror, e))
+            end
+            # Negative p should error
+            try
+                p_median(rand(5,2), -1)
+                error(\"Expected error not raised!\")
+            catch e
+                println(\"✓ p<0 guard fired: \", sprint(showerror, e))
+            end
+          "
+
+  # ── Job 5: Framework status ────────────────────────────────────────────────
+  framework-status:
+    name: Framework Status
+    runs-on: ubuntu-latest
+    needs:
+      - test-error-handling
+      - test-test-utils
+      - debug-runner-smoke
+      - validation-retrofit
+    if: always()
+    steps:
+      - name: Check all jobs
+        run: |
+          echo "ErrorHandling   : ${{ needs.test-error-handling.result }}"
+          echo "TestUtils       : ${{ needs.test-test-utils.result }}"
+          echo "DebugRunner     : ${{ needs.debug-runner-smoke.result }}"
+          echo "Validation      : ${{ needs.validation-retrofit.result }}"
+          if [[ "${{ needs.test-error-handling.result }}"  == "success" && \
+                "${{ needs.test-test-utils.result }}"      == "success" && \
+                "${{ needs.validation-retrofit.result }}"  == "success" ]]; then
+            echo "✓ Error Handling & Test Framework — all jobs passed"
+          else
+            echo "✗ One or more framework jobs failed"
+            exit 1
+          fi

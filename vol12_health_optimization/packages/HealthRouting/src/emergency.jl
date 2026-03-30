@@ -1,5 +1,18 @@
 # emergency.jl — Emergency medical services: MEXCLP, dispatch, Erlang-C
 
+# ── Input validation helpers ───────────────────────────────────────────────────
+function _ems_validate_coords(m, name)
+    size(m, 2) == 2 && size(m, 1) > 0 ||
+        error("$(name) must be n×2 coordinate matrix (got $(size(m)))")
+    all(isfinite, m) || error("$(name) contains NaN or Inf")
+end
+
+function _erlang_validate(λ, μ, c)
+    λ > 0 || error("arrival rate λ must be > 0 (got $(λ))")
+    μ > 0 || error("service rate μ must be > 0 (got $(μ))")
+    c >= 1 || error("number of servers c must be ≥ 1 (got $(c))")
+end
+
 struct EmergencyResult
     facility_locs::Vector{Int}    # open ambulance station indices
     coverage::Vector{Float64}     # expected coverage probability per demand zone
@@ -25,6 +38,16 @@ function mexclp(demand_pts::AbstractMatrix,
                 busy_fraction::Float64=0.3,
                 coverage_radius::Float64=8.0,
                 rng=Random.default_rng())
+    _ems_validate_coords(demand_pts, "demand_pts")
+    _ems_validate_coords(cand_pts,   "cand_pts")
+    (busy_fraction < 0.0 || busy_fraction > 1.0) &&
+        error("busy_fraction must be in [0,1] (got $(busy_fraction))")
+    coverage_radius <= 0 &&
+        error("coverage_radius must be > 0 (got $(coverage_radius))")
+    p < 1 && error("p must be ≥ 1 (got $(p))")
+    length(weights) == size(demand_pts,1) ||
+        error("weights length ($(length(weights))) ≠ n_demand ($(size(demand_pts,1)))")
+    any(weights .< 0) && error("all weights must be non-negative")
     n, m = size(demand_pts,1), size(cand_pts,1)
     p    = min(p, m)
     q    = busy_fraction
@@ -117,6 +140,9 @@ Erlang-C formula for M/M/c queueing system.
 Returns P(wait), E[wait], E[queue length], and minimum c for target service level.
 """
 function erlang_c(λ::Float64, μ::Float64, c::Int; target_pw::Float64=0.2)
+    _erlang_validate(λ, μ, c)
+    (target_pw < 0.0 || target_pw > 1.0) &&
+        error("target_pw must be in [0,1] (got $(target_pw))")
     ρ = λ / (μ * c)
     ρ >= 1.0 && return (p_wait=1.0, mean_wait=Inf, mean_queue=Inf, min_servers=c+1)
 
