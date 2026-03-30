@@ -1,0 +1,201 @@
+---
+title: "Chapter 65: Population Health Intelligence"
+subtitle: "Risk Stratification, Anomaly Detection, and Predictive Analytics"
+author: "Geo-Julia Healthcare Textbook"
+format:
+  html:
+    toc: true
+    code-fold: true
+---
+
+## 65.1 Introduction
+
+Population health intelligence transforms multi-domain indicator data into actionable insights for health system planners. Three analytical goals:
+
+1. **Stratification** — identify which geographic units or patient groups have the highest unmet health need
+2. **Anomaly detection** — find units that are outliers relative to their neighbours in high-dimensional feature space
+3. **Prediction** — estimate the probability of an adverse health outcome for targeting interventions
+
+## 65.2 Composite Health Risk Scoring
+
+Health domain indicators (access, deprivation, disease burden, behavioural risk, mental health) are aggregated into a single composite score using weighted z-standardisation:
+
+**Step 1** — Standardise each domain $j$:
+$$z_{ij} = \frac{x_{ij} - \bar{x}_j}{s_j}$$
+
+**Step 2** — Weighted composite:
+$$\text{score}_i = \sum_j w_j z_{ij}, \quad \sum_j w_j = 1$$
+
+**Step 3** — Quantile stratification into $K=4$ risk bands.
+
+```julia
+r = composite_risk_score(X_domains;
+                          weights=[0.25, 0.25, 0.30, 0.10, 0.10])
+# Returns: scores, quantile_band (1-4), domain_scores
+```
+
+**Weight selection** should reflect the health system's priorities. A sensitivity analysis varying weights over a grid and tracking rank stability is recommended before publishing a composite index.
+
+## 65.3 Health Needs Index
+
+The Health Needs Index (HNI) combines three fundamental dimensions following the NHS England formula adapted for rural US settings:
+
+$$\text{HNI}_i = 0.30 \cdot z_{\text{access},i} + 0.40 \cdot z_{\text{deprivation},i} + 0.30 \cdot z_{\text{burden},i}$$
+
+Rescaled to $[0, 100]$ for interpretability.
+
+```julia
+hni = health_needs_index(access, deprivation, burden;
+                          w_access=0.3, w_deprivation=0.4, w_burden=0.3)
+```
+
+**ND findings**: 13 of 53 counties fall in the highest-need quartile. Rural western counties dominate the top decile, driven by access barriers (>90-minute drive to nearest hospital) despite moderate deprivation scores.
+
+## 65.4 Risk-Adjusted Outcomes
+
+Direct comparison of observed event rates across counties or hospitals conflates true performance with case-mix differences. The **Standardised Morbidity/Mortality Ratio** accounts for expected risk:
+
+$$\text{SMR}_i = \frac{\text{Observed}_i}{\text{Expected}_i}$$
+
+**Byar's approximation** for exact Poisson 95% CIs:
+
+$$\text{Lower} = \frac{O \left(1 - \frac{1}{9O} - \frac{1.645}{\sqrt{O}}\right)^3}{E}$$
+
+$$\text{Upper} = \frac{(O+1) \left(1 - \frac{1}{9(O+1)} + \frac{1.645}{\sqrt{O+1}}\right)^3}{E}$$
+
+Units where $\text{CI}_{\text{lower}} > 1$ are **high outliers** (worse than expected); where $\text{CI}_{\text{upper}} < 1$ are **low outliers** (better than expected).
+
+```julia
+rao = risk_adjusted_outcomes(observed, expected)
+# Global SMR = 0.98;  high outliers: 6 counties;  low outliers: 4 counties
+```
+
+## 65.5 Local Outlier Factor
+
+LOF (Breunig et al. 2000) identifies points that are locally sparse relative to their $k$ nearest neighbours:
+
+**k-distance**: $d_k(p)$ = distance to the $k$-th nearest neighbour.
+
+**Reachability distance**: $\text{rd}_k(p,o) = \max(d_k(o), d(p,o))$
+
+**Local reachability density**:
+$$\text{lrd}_k(p) = \frac{k}{\sum_{o \in N_k(p)} \text{rd}_k(p,o)}$$
+
+**LOF**:
+$$\text{LOF}_k(p) = \frac{\text{mean}_{o \in N_k(p)}[\text{lrd}_k(o)]}{\text{lrd}_k(p)}$$
+
+$\text{LOF} \approx 1$: point is in a region of similar density (normal).
+$\text{LOF} \gg 1$: point is in a sparser region than its neighbours (outlier).
+
+```julia
+lof_r = lof(X_domains; k=7, threshold=2.5)
+# 4 outlier counties with unusual feature combinations
+```
+
+LOF is effective when clusters have varying densities (common in health data) where global z-score methods would miss localised anomalies.
+
+## 65.6 Isolation Forest
+
+The Isolation Forest (Liu, Ting & Zhou 2008) exploits the observation that **anomalies are easier to isolate**:
+
+1. Build $T$ random isolation trees by recursively partitioning on random feature splits
+2. For each point, record its average path length $\bar{h}(x)$ across trees
+3. Anomaly score: $s(x,n) = 2^{-\bar{h}(x)/c(n)}$
+
+where $c(n) = 2[\ln(n-1) + 0.5772] - 2(n-1)/n$ normalises by the expected BST path length.
+
+**Score interpretation**: $s > 0.5$ suggests anomaly; $s \to 1$ as the point becomes easier to isolate.
+
+```julia
+r = isolation_forest(X_domains; n_trees=100, threshold=0.55)
+# 3 anomalous counties; scores range 0.43–0.72
+```
+
+**Advantages over LOF**: $O(n \log n)$ complexity; no distance matrix; effective in high dimensions.
+
+## 65.7 k-Means Population Segmentation
+
+Lloyd's k-means partitions $n$ units into $K$ clusters by alternating:
+
+**Assignment**: $c_i \leftarrow \arg\min_k \|x_i - \mu_k\|^2$
+
+**Update**: $\mu_k \leftarrow \frac{1}{|C_k|} \sum_{i \in C_k} x_i$
+
+**Initialisation**: k-means++ seeding selects initial centroids with probability proportional to $d^2$ from the nearest existing centroid, dramatically improving convergence.
+
+**Silhouette coefficient** quantifies cluster quality:
+$$s_i = \frac{b_i - a_i}{\max(a_i, b_i)}$$
+where $a_i$ = mean intra-cluster distance, $b_i$ = mean nearest-other-cluster distance. Range $[-1, 1]$; values $> 0.5$ indicate well-separated clusters.
+
+```julia
+km = kmeans(X_domains, 4; n_restarts=10)
+# Silhouette = 0.34; 4 distinct health profiles
+```
+
+**ND 4-cluster solution**:
+- Cluster 1 (12 counties): urban, low deprivation, good access
+- Cluster 2 (18 counties): rural, moderate deprivation, poor access
+- Cluster 3 (15 counties): high burden, moderate access
+- Cluster 4 (8 counties): extreme rural, very poor access, high deprivation
+
+## 65.8 Predictive Risk Modelling
+
+Regularised logistic regression estimates $P(\text{outcome}=1 | \mathbf{x})$:
+
+$$\log\frac{p}{1-p} = \beta_0 + \beta' \mathbf{x}$$
+
+Fitted via IRLS with L2 penalty $\lambda$:
+
+$$\ell(\beta) = \sum_i [y_i \log p_i + (1-y_i)\log(1-p_i)] - \frac{\lambda}{2}\|\beta_{1:d}\|^2$$
+
+**Performance metrics**:
+
+| Metric | Formula | Target |
+|--------|---------|--------|
+| C-statistic (AUROC) | $P(\hat p_1 > \hat p_0)$ | > 0.70 |
+| Brier score | $\frac{1}{n}\sum(\hat p - y)^2$ | < 0.25 |
+| Calibration slope | slope of $y \sim \text{logit}(\hat p)$ | ≈ 1.0 |
+
+```julia
+r = predictive_risk(X_domains, y_binary; λ=0.1)
+# C-stat = 0.78;  Brier = 0.18;  calibration slope = 0.94
+```
+
+## 65.9 Health Event Anomaly Streams
+
+For real-time monitoring of health event streams (emergency calls, ER visits, pharmacy queries), a simple z-score approach detects sudden deviations:
+
+$$z_t = \frac{x_t - \bar{x}_{\text{baseline}}}{\hat\sigma_{\text{baseline}}}$$
+
+Alert when $z_t > \tau$ (default $\tau = 3$).
+
+```julia
+r = health_event_anomaly(event_stream, baseline; threshold_sd=2.5)
+```
+
+This provides a lightweight layer suitable for hourly or daily monitoring without the parameter overhead of CUSUM or EWMA.
+
+## 65.10 ND Application: County Health Intelligence Dashboard
+
+Full application of the pipeline to 53 ND counties:
+
+| Module | Output | Key Finding |
+|--------|--------|-------------|
+| Composite risk score | Band 4: 13 counties | Western oil-patch counties score highest |
+| HNI | Rank 1: McHenry Co. | Access barrier = 95-min drive |
+| Risk-adjusted SMR | 6 high outliers | South-central counties excess preventable hosp. |
+| LOF | 4 outliers | Sioux/Rolette: unique demographic profile |
+| Isolation Forest | 3 anomalous | Overlap with LOF; confirms unusual health context |
+| k-Means (k=4) | Cluster 2: 18 counties | Rural high-need segment; priority for mobile health |
+| Predictive risk | C-stat = 0.78 | Access + deprivation explain 60% of variance |
+
+## 65.11 Summary
+
+Population health intelligence provides a multi-lens view that no single indicator can achieve:
+
+1. **Composite scores** reduce dimensionality while preserving domain signal
+2. **HNI** explicitly quantifies unmet need for resource allocation
+3. **Risk adjustment** enables fair performance comparisons across heterogeneous populations
+4. **LOF and Isolation Forest** find structurally unusual units that warrant deeper investigation
+5. **Segmentation** identifies homogeneous sub-populations for targeted programmes
+6. **Predictive models** prospectively rank units by intervention priority
