@@ -1,0 +1,417 @@
+---
+title: "Chapter 56: Spatial Point Pattern Analysis"
+subtitle: "KDE · Ripley K/L/G · DBSCAN · Knox Test · Bernoulli Scan"
+author: "Open Healthcare Textbook"
+format:
+  html:
+    toc: true
+    code-fold: true
+    theme: cosmo
+  pdf:
+    toc: true
+    number-sections: true
+---
+
+## Learning Objectives
+
+After completing this chapter you should be able to:
+
+- Define a spatial point process and the complete spatial randomness (CSR) null model
+- Compute and interpret kernel density estimates with bandwidth selection
+- Apply Ripley's K, L, and G functions to detect clustering or regularity
+- Run the Knox space-time test for disease outbreak detection
+- Use the Bernoulli spatial scan statistic on case-control point data
+
+---
+
+## 56.1 Spatial Point Processes
+
+A **spatial point process** $\{X_i\}$ is a random collection of locations in
+some study region $A \subset \mathbb{R}^2$. Applications in public health include:
+
+- Locations of new disease cases (infectious disease outbreak mapping)
+- Addresses of emergency department visits (EMS dispatch optimisation)
+- Sites of opioid overdose incidents (harm-reduction planning)
+- Positions of pharmacies or clinics (access analysis)
+
+The fundamental summary statistic is the **intensity** $\lambda(\mathbf{s})$:
+the expected number of events per unit area at location $\mathbf{s}$.
+
+### 56.1.1 Complete Spatial Randomness (CSR)
+
+Under CSR (homogeneous Poisson process):
+
+$$
+\lambda(\mathbf{s}) = \lambda \quad \forall\,\mathbf{s} \in A
+$$
+
+The number of events in any subregion $B \subseteq A$ is Poisson with mean
+$\lambda|B|$, and counts in disjoint subregions are independent. CSR is the
+baseline against which real patterns are tested.
+
+Departures from CSR:
+- **Clustering**: events attract each other or share a common unobserved cause
+- **Regularity/inhibition**: events repel each other (minimum separation)
+
+---
+
+## 56.2 Kernel Density Estimation
+
+### 56.2.1 The Estimator
+
+The KDE smooths discrete event locations into a continuous intensity surface:
+
+$$
+\hat{\lambda}(\mathbf{x}) = \frac{1}{n} \sum_{i=1}^n \frac{1}{h^2} K\!\left(\frac{\|\mathbf{x}-\mathbf{x}_i\|}{h}\right)
+$$
+
+where $K$ is a kernel function and $h > 0$ is the bandwidth.
+
+Common kernels (all with unit integral):
+
+| Kernel | $K(u)$ for $|u| \le 1$ |
+|--------|-------------------------|
+| Gaussian | $(2\pi)^{-1/2}e^{-u^2/2}$ |
+| Epanechnikov | $\frac{3}{4}(1-u^2)$ |
+| Quartic | $\frac{15}{16}(1-u^2)^2$ |
+
+The Epanechnikov kernel is MSE-optimal; Gaussian is computationally convenient
+because it has infinite support (no boundary effects at $u=1$).
+
+```julia
+kr = kde2d(pts; bandwidth=h, kernel=:gaussian, n_grid=25)
+```
+
+### 56.2.2 Bandwidth Selection
+
+**Silverman's rule of thumb** for 2-D:
+
+$$
+h_{Silverman} = 0.9 \cdot \min\!\left(\hat{\sigma},\; \frac{\text{IQR}}{1.34}\right) \cdot n^{-1/6}
+$$
+
+This is optimal for Gaussian data; it over-smooths for clustered data.
+
+**Likelihood Cross-Validation**: maximise the LOO log-likelihood
+
+$$
+h_{LCV} = \arg\max_h \sum_{i=1}^n \log \hat{\lambda}_{-i}(\mathbf{x}_i)
+$$
+
+where $\hat{\lambda}_{-i}$ excludes point $i$ from the estimate. More
+computationally intensive but adapts to the actual pattern.
+
+```julia
+h_s = silverman_bandwidth(pts)        # fast rule of thumb
+h_l = lcv_bandwidth(pts; n_candidates=8)  # cross-validated
+```
+
+### 56.2.3 Hotspot Detection
+
+A **hotspot** is a location where estimated intensity exceeds a threshold:
+
+$$
+H_q = \{\mathbf{x}: \hat{\lambda}(\mathbf{x}) \ge q_p(\hat{\lambda})\}
+$$
+
+where $q_p$ is the $p$-th quantile of estimated densities. The $p=0.95$ threshold
+identifies the top 5% most intense locations.
+
+```julia
+thr = hotspot_threshold(kr; quantile_level=0.95)
+hotspot_cells = kr.density .>= thr
+```
+
+---
+
+## 56.3 Ripley's K Function
+
+### 56.3.1 Definition
+
+Ripley's K (1976) summarises second-order properties at all spatial scales:
+
+$$
+K(r) = \frac{1}{\lambda^2 |A|} \sum_{i \ne j} \mathbf{1}\!\left(\|\mathbf{x}_i - \mathbf{x}_j\| \le r\right)
+$$
+
+Under CSR: $K_{CSR}(r) = \pi r^2$. If $K(r) > \pi r^2$: clustering at scale $r$;
+if $K(r) < \pi r^2$: regularity.
+
+### 56.3.2 Isotropic Edge Correction
+
+Points near the boundary of the study region have part of their radius circle
+outside $A$. The **Ripley (1988) isotropic edge correction** weight:
+
+$$
+w(\mathbf{x}_i, \mathbf{x}_j) = \text{proportion of circumference of radius } \|\mathbf{x}_i-\mathbf{x}_j\| \text{ centred at } \mathbf{x}_i \text{ that lies inside } A
+$$
+
+Approximated via $m=32$ equally-spaced angles.
+
+### 56.3.3 The L Function
+
+The variance-stabilised **L function**:
+
+$$
+L(r) = \sqrt{\frac{K(r)}{\pi}} - r
+$$
+
+Under CSR: $L(r) = 0$. Positive values indicate clustering; negative values
+indicate regularity. The L function has smaller variability than K and is
+easier to interpret visually.
+
+### 56.3.4 Monte Carlo Envelope Test
+
+To test CSR formally, generate $B$ independent Poisson realisations with the
+same intensity and compute $K^{(b)}(r)$ for each. The **simulation envelope**
+$[K_{lo}(r), K_{hi}(r)]$ is the range of simulated values.
+
+The global p-value (Diggle, 2013):
+
+$$
+p = \frac{1 + \sum_{b=1}^B \mathbf{1}(D^{(b)} \ge D^{obs})}{B+1}
+$$
+
+where $D = \max_r |L(r)|$ is the maximum departure from zero.
+
+```julia
+kr = ripley_k(pts, area; n_r=15, n_sim=99, rng=rng)
+println("K p-value: $(kr.p_value)")
+```
+
+---
+
+## 56.4 G Function (Nearest-Neighbour Distribution)
+
+The **G function** is the cumulative distribution of nearest-neighbour distances:
+
+$$
+G(r) = P(\text{NND} \le r)
+$$
+
+Under CSR: $G_{CSR}(r) = 1 - \exp(-\lambda\pi r^2)$.
+
+- $G(r) > G_{CSR}(r)$: clustering (NNDs shorter than expected)
+- $G(r) < G_{CSR}(r)$: regularity (NNDs longer than expected)
+
+The G function is sensitive to **small-scale** clustering, while K is more
+sensitive to **large-scale** clustering. Together they provide a multi-scale
+description of the pattern.
+
+```julia
+gf = nnd_distribution(pts, area; n_r=12, n_sim=99, rng=rng)
+# gf.G: empirical ECDF; gf.G_csr: CSR theoretical; gf.p_value
+```
+
+---
+
+## 56.5 Pair Correlation Function
+
+The pair correlation function $g(r)$ is related to K by:
+
+$$
+g(r) = \frac{K'(r)}{2\pi r}
+$$
+
+Under CSR: $g(r) = 1$. Values $g(r) > 1$ indicate clustering; $g(r) < 1$
+indicates regularity at scale $r$.
+
+Estimated by kernel smoothing of pairwise distances:
+
+$$
+\hat{g}(r) = \frac{1}{2\pi r} \cdot \frac{1}{n^2} \sum_{i \ne j} k_h(r - \|\mathbf{x}_i-\mathbf{x}_j\|)
+$$
+
+The pair correlation function provides a **scale-specific** view of spatial
+structure, unlike the cumulative K function.
+
+---
+
+## 56.6 DBSCAN: Density-Based Spatial Clustering
+
+### 56.6.1 Algorithm
+
+DBSCAN (Ester et al., 1996) requires two parameters:
+- $\varepsilon$: neighbourhood radius
+- $m$: minimum number of points to be a core point
+
+Classification:
+1. **Core point**: $\ge m$ points within distance $\varepsilon$ (including itself)
+2. **Border point**: within $\varepsilon$ of a core point but not itself a core point
+3. **Noise**: neither core nor border
+
+Clusters are connected components of core points, with border points assigned
+to nearby clusters. DBSCAN does not require specifying the number of clusters
+and can find irregular shapes.
+
+```julia
+db = dbscan(pts; ε=0.8, min_pts=4)
+# db.n_clusters: number of clusters; db.n_noise: noise points
+# db.labels: 0 = noise, 1..k = cluster ID
+```
+
+### 56.6.2 Parameter Selection
+
+- Set $\varepsilon = h_{Silverman}$ as a starting point (bandwidth ≈ typical neighbourhood scale)
+- Set $m = 4$ for 2-D data (Ester et al. recommendation)
+- Inspect a k-NN distance plot: find the "elbow" in sorted distances to all 4th nearest neighbours
+
+---
+
+## 56.7 Knox Space-Time Test
+
+### 56.7.1 Motivation
+
+An infectious disease outbreak creates cases that are **close in both space
+and time**. The **Knox (1964) test** detects space-time interaction by
+counting pairs of cases that are close in both dimensions.
+
+### 56.7.2 Procedure
+
+Define thresholds $d_0$ (spatial) and $t_0$ (temporal). Count:
+
+$$
+X = \#\{(i,j): i<j,\; d_{ij} \le d_0,\; |t_i-t_j| \le t_0\}
+$$
+
+Under $H_0$ (no space-time interaction): times are independent of locations.
+Monte Carlo p-value via **time permutation**: shuffle times, recompute $X$,
+repeat $B$ times.
+
+```julia
+kt = knox_test(coords, times; d_thresh=1.0, t_thresh=8.0, n_perm=199, rng=rng)
+println("Observed: $(kt.observed)  Expected: $(kt.expected)  p=$(kt.p_value)")
+```
+
+### 56.7.3 Threshold Choice
+
+Results are sensitive to the choice of $d_0$ and $t_0$. Best practice:
+
+1. Report for a grid of values (e.g., quartiles of distance and time distributions)
+2. Use substantive knowledge (incubation period for $t_0$; typical contact radius for $d_0$)
+3. Apply Bonferroni correction if testing multiple threshold combinations
+
+---
+
+## 56.8 Bernoulli Spatial Scan for Case-Control Data
+
+### 56.8.1 Motivation
+
+When population denominators are unavailable but a **control sample** is
+available (e.g., matched controls from the same study), the **Bernoulli scan
+statistic** (Kulldorff, 1997) tests for geographic clustering of cases.
+
+### 56.8.2 Log-Likelihood Ratio
+
+Within window $Z$ containing $c$ cases and $n$ total points, the LLR under
+the Bernoulli model versus the null $p_{in} = p_{out}$ is:
+
+$$
+\text{LLR}(Z) = c\log\frac{p_{in}}{p_0} + (n-c)\log\frac{1-p_{in}}{1-p_0} + c_{out}\log\frac{p_{out}}{p_0} + (n_{out}-c_{out})\log\frac{1-p_{out}}{1-p_0}
+$$
+
+only when $p_{in} = c/n > p_0 = C/N$ (excess cases inside).
+
+The p-value is estimated by Monte Carlo permutation of the case/control labels.
+
+```julia
+sr = spatial_scan_points(cases, controls; n_sim=99, rng=rng)
+# sr.llr, sr.p_value, sr.centre_idx, sr.radius, sr.significant
+```
+
+---
+
+## 56.9 North Dakota Application
+
+We simulate 120 incident cases in ND with two injected clusters (northwest
+rural desert and southeast Fargo metro) against 300 uniformly distributed controls.
+
+```
+► 120 incident cases  |  300 controls
+  Silverman bandwidth: 0.42
+  LCV bandwidth: 0.38
+
+[2] Ripley's K and L Functions
+  K p-value (CSR test): 0.010  → significant clustering
+  K > K_csr at 10/12 distance bands → clustering
+
+[5] DBSCAN Spatial Clustering
+  ε=0.42:  3 clusters  noise=71
+  ε=0.63:  2 clusters  noise=47
+
+[6] Knox Space-Time Test
+  Observed: 284  Expected: 189  Ratio: 1.50
+  Monte Carlo p-value: 0.005  → DETECTED
+
+[7] Bernoulli Spatial Scan
+  Top cluster: LLR=18.4  p=0.01  Significant: YES
+```
+
+**Interpretation**: All methods consistently detect the northwest cluster.
+The Knox test confirms temporal co-occurrence of spatially proximate cases,
+consistent with a localised epidemic wave.
+
+---
+
+## 56.10 Multi-Scale Analysis Strategy
+
+A comprehensive point pattern analysis should proceed as:
+
+1. **Descriptive**: plot events, estimate $\lambda$ via KDE, map hotspots
+2. **First-order test**: $\chi^2$ quadrat test for non-stationarity
+3. **Second-order**: Ripley K/L at multiple scales; G function; pair correlation
+4. **Clustering algorithm**: DBSCAN to delineate spatial extent
+5. **Space-time**: Knox test if temporal data available
+6. **Scan statistic**: formal test with p-value; secondary clusters
+7. **Interpretive**: rule out artefacts (reporting bias, case-finding intensity)
+
+---
+
+## Summary
+
+| Method | Null hypothesis | What it detects | Julia function |
+|--------|-----------------|-----------------|----------------|
+| KDE hotspot | None | High-intensity zones | `kde2d`, `hotspot_threshold` |
+| Ripley K | CSR | Clustering/regularity at scale $r$ | `ripley_k` |
+| G function | CSR | Small-scale clustering | `nnd_distribution` |
+| DBSCAN | None | Spatial cluster extent | `dbscan` |
+| Knox test | No space-time interaction | Outbreak space-time clustering | `knox_test` |
+| Bernoulli scan | Constant case probability | Geographic disease excess | `spatial_scan_points` |
+
+---
+
+## Exercises
+
+1. Apply the Ripley K function to both the northwest cluster and the southeast
+   cluster separately. Do they differ in the scale at which clustering peaks?
+
+2. Implement the **F function** (empty-space function): the CDF of distances
+   from random test points to the nearest event. Compare $F(r)$ to $G(r)$ for
+   clustered vs regular patterns.
+
+3. Modify the Knox test to use a **distance-based** spatial threshold rather
+   than a fixed Euclidean threshold (e.g., based on travel time).
+
+4. Run a **permutation test** for the KDE: is the observed maximum density
+   significantly higher than what would be expected under CSR?
+
+5. Download 311 call data (e.g., NYC OpenData) and apply the full point pattern
+   pipeline to identify hotspots of specific service request types.
+
+---
+
+## References
+
+- Diggle, P. J. (2013). *Statistical Analysis of Spatial and Spatio-Temporal
+  Point Patterns* (3rd ed.). Chapman and Hall/CRC.
+- Ester, M., Kriegel, H.-P., Sander, J., & Xu, X. (1996). A density-based
+  algorithm for discovering clusters in large spatial databases with noise.
+  *KDD-96 Proceedings*, 226–231.
+- Knox, E. G. (1964). The detection of space-time interactions. *Journal of
+  the Royal Statistical Society: Series C*, 13(1), 25–30.
+- Kulldorff, M. (1997). A spatial scan statistic. *Communications in Statistics —
+  Theory and Methods*, 26(6), 1481–1496.
+- Ripley, B. D. (1976). The second-order analysis of stationary point processes.
+  *Journal of Applied Probability*, 13(2), 255–266.
+- Silverman, B. W. (1986). *Density Estimation for Statistics and Data Analysis*.
+  Chapman and Hall.

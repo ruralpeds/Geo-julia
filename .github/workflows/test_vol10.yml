@@ -1,0 +1,117 @@
+name: Vol 10 — Geostatistics & Mapping Tests
+
+on:
+  push:
+    paths:
+      - 'vol10_geostatistics_mapping/**'
+      - '.github/workflows/test_vol10.yml'
+  pull_request:
+    paths:
+      - 'vol10_geostatistics_mapping/**'
+      - '.github/workflows/test_vol10.yml'
+
+jobs:
+  test-geostathealth:
+    name: GeostatHealth.jl (Julia ${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run GeostatHealth tests
+        run: |
+          julia --project=. -e '
+            using Test
+            include("vol10_geostatistics_mapping/packages/GeostatHealth/test/runtests.jl")
+          '
+
+  test-diseasemapping:
+    name: DiseaseMapping.jl (Julia ${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run DiseaseMapping tests
+        run: |
+          julia --project=. -e '
+            using Test
+            include("vol10_geostatistics_mapping/packages/DiseaseMapping/test/runtests.jl")
+          '
+
+  test-pointpatterns:
+    name: PointPatterns.jl (Julia ${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run PointPatterns tests
+        run: |
+          julia --project=. -e '
+            using Test
+            include("vol10_geostatistics_mapping/packages/PointPatterns/test/runtests.jl")
+          '
+
+  test-integration:
+    name: Vol 10 Integration Tests (Julia ${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    needs: [test-geostathealth, test-diseasemapping, test-pointpatterns]
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run integration tests
+        run: |
+          julia --project=. -e '
+            using Test
+            include("vol10_geostatistics_mapping/test/integration_test.jl")
+          '
+
+  vol10-status:
+    name: Vol 10 Status
+    runs-on: ubuntu-latest
+    needs: [test-geostathealth, test-diseasemapping, test-pointpatterns, test-integration]
+    if: always()
+    steps:
+      - name: Report status
+        run: |
+          echo "======================================================"
+          echo "  Vol 10 — Geostatistics & Mapping: Test Summary"
+          echo "======================================================"
+          echo "  GeostatHealth:  ${{ needs.test-geostathealth.result }}"
+          echo "  DiseaseMapping: ${{ needs.test-diseasemapping.result }}"
+          echo "  PointPatterns:  ${{ needs.test-pointpatterns.result }}"
+          echo "  Integration:    ${{ needs.test-integration.result }}"
+          echo "======================================================"
+          if [[ "${{ needs.test-geostathealth.result }}"  != "success" ||
+                "${{ needs.test-diseasemapping.result }}" != "success" ||
+                "${{ needs.test-pointpatterns.result }}"  != "success" ||
+                "${{ needs.test-integration.result }}"    != "success" ]]; then
+            echo "  RESULT: FAILED"; exit 1
+          fi
+          echo "  RESULT: ALL PASSED"

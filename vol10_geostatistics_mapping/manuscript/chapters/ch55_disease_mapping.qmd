@@ -1,0 +1,367 @@
+---
+title: "Chapter 55: Bayesian Disease Mapping"
+subtitle: "SMR · Empirical Bayes · BYM Model · Spatial Scan Statistics"
+author: "Open Healthcare Textbook"
+format:
+  html:
+    toc: true
+    code-fold: true
+    theme: cosmo
+  pdf:
+    toc: true
+    number-sections: true
+---
+
+## Learning Objectives
+
+After completing this chapter you should be able to:
+
+- Compute age-sex standardised mortality/morbidity ratios (SMR) and their confidence intervals
+- Apply empirical Bayes shrinkage to reduce small-area instability
+- Understand and implement the Besag–York–Mollié (BYM) spatial random effects model
+- Use the Kulldorff spatial scan statistic to detect disease clusters
+- Critically evaluate maps for artefacts, small-number problems, and confounding
+
+---
+
+## 55.1 The Small-Area Disease Mapping Problem
+
+Mapping disease rates at fine geographic resolution (county, census tract,
+neighbourhood) faces a fundamental tension:
+
+- **High resolution** provides local detail for public health planning
+- **Small populations** produce unstable rates: a single extra case may double
+  a county's apparent risk
+
+**Relative risk** in area $i$:
+$$
+\theta_i = \frac{O_i}{E_i}
+$$
+
+where $O_i$ is the observed count and $E_i$ the expected count under a reference
+rate. The raw SMR $= O_i/E_i$ is an unbiased but high-variance estimator,
+particularly when $E_i < 5$.
+
+### 55.1.1 Expected Counts via Indirect Standardisation
+
+$$
+E_i = \sum_a n_{ia} \cdot r_a^{\mathrm{ref}}
+$$
+
+where $n_{ia}$ is the population in area $i$, age group $a$, and $r_a^{\mathrm{ref}}$
+is the reference population rate in age group $a$.
+
+```julia
+E_std, O_std = indirect_standardise(counts_age, pop_age, ref_rates)
+```
+
+---
+
+## 55.2 Standardised Mortality/Morbidity Ratio
+
+### 55.2.1 Definition and Interpretation
+
+The SMR compares observed to expected counts:
+
+| SMR | Interpretation |
+|-----|----------------|
+| $<1$ | Fewer cases than expected (lower risk) |
+| $=1$ | Observed matches expected |
+| $>1$ | Excess cases (elevated risk) |
+
+### 55.2.2 Confidence Intervals
+
+Assuming $O_i \sim \text{Poisson}(E_i\theta_i)$, **Byar's (1979)** approximation
+provides CIs without requiring large-sample normal theory:
+
+$$
+\theta^{lo}_i = \frac{O_i\left(1 - \frac{1}{9O_i} - \frac{z_{\alpha/2}}{\sqrt{9O_i}}\right)^3}{E_i}
+$$
+$$
+\theta^{hi}_i = \frac{(O_i+1)\left(1 - \frac{1}{9(O_i+1)} + \frac{z_{\alpha/2}}{\sqrt{9(O_i+1)}}\right)^3}{E_i}
+$$
+
+This approximation works well for $O_i \ge 1$ and is standard in UK health
+statistics (Gardner & Altman, 1989).
+
+```julia
+results = batch_smr(O, E; areas=county_names)
+# Each result: smr, lower_ci, upper_ci, p_value, significant
+```
+
+### 55.2.3 Limitations of Raw SMR Maps
+
+- **Variance instability**: high-variance estimates in low-population areas
+- **Visual bias**: eye is drawn to large areas with small populations
+- **Multiple testing**: 100 counties → 5 false positives expected at $\alpha=0.05$
+
+---
+
+## 55.3 Empirical Bayes Smoothing
+
+### 55.3.1 Gamma-Poisson Model
+
+A conjugate prior for the Poisson likelihood $O_i|\theta_i \sim \text{Poisson}(E_i\theta_i)$
+is the Gamma: $\theta_i \sim \text{Gamma}(\alpha, \beta)$.
+
+The posterior is also Gamma:
+$$
+\theta_i | O_i \sim \text{Gamma}(\alpha + O_i,\; \beta + E_i)
+$$
+
+with posterior mean (the EB estimate):
+$$
+\hat{\theta}^{EB}_i = \frac{O_i + \hat{\alpha}}{E_i + \hat{\beta}}
+$$
+
+This shrinks each SMR towards the global mean $\hat{\alpha}/\hat{\beta}$, with
+stronger shrinkage for small $E_i$.
+
+### 55.3.2 Moment Estimation of Hyperparameters
+
+From the marginal distribution $O_i \sim \text{NegBinomial}(\alpha, \beta/(\beta+E_i))$,
+method-of-moments estimators are:
+
+$$
+\hat{\alpha} = \frac{\hat{\mu}^2}{\hat{\sigma}^2 - \hat{\mu}/\bar{E}}, \qquad
+\hat{\beta} = \frac{\hat{\mu}}{\hat{\sigma}^2 - \hat{\mu}/\bar{E}}
+$$
+
+where $\hat{\mu} = \sum O_i / \sum E_i$ and $\hat{\sigma}^2 = \text{Var}(O_i/E_i)$.
+
+```julia
+eb = eb_smooth(O, E)
+# eb.θ_hat: posterior means; eb.shrinkage: pull towards global mean
+```
+
+### 55.3.3 Kernel Smoothing
+
+An alternative non-parametric smoother weights neighbouring areas by a
+distance kernel:
+
+$$
+\tilde{\theta}_i = \frac{\sum_j w_{ij} O_j}{\sum_j w_{ij} E_j}
+$$
+
+This preserves approximate spatial patterns while reducing noise. Gaussian
+kernel: $w_{ij} = \exp(-d_{ij}^2/2h^2)$.
+
+---
+
+## 55.4 Bayesian Spatial Random Effects: The BYM Model
+
+### 55.4.1 Model Specification
+
+Besag, York, and Mollié (1991) proposed a two-component random effect model:
+
+$$
+O_i \mid \eta_i \sim \text{Poisson}(E_i\,e^{\eta_i})
+$$
+$$
+\eta_i = \mu + u_i + v_i
+$$
+
+where:
+- $u_i$ is a **structured spatial effect** (ICAR prior — spatially smooth)
+- $v_i$ is an **unstructured heterogeneity** (exchangeable Gaussian)
+- $\mu$ is the global log-rate intercept
+
+### 55.4.2 ICAR Prior for $u$
+
+The **Intrinsic Conditional Auto-Regressive** (ICAR) prior:
+
+$$
+u_i \mid u_{-i},\, \tau_u \sim N\!\left(\bar{u}_{\partial i},\; \frac{1}{\tau_u m_i}\right)
+$$
+
+where $\bar{u}_{\partial i} = \frac{1}{m_i}\sum_{j\sim i} u_j$ is the mean of
+neighbours, and $m_i$ is the number of neighbours of area $i$.
+
+Equivalently, $\mathbf{u} \mid \tau_u \propto \tau_u^{(n-1)/2} \exp\!\left(-\frac{\tau_u}{2}\mathbf{u}^\top\mathbf{Q}\mathbf{u}\right)$
+
+where $\mathbf{Q} = \mathbf{D} - \mathbf{W}$ is the ICAR precision matrix
+($\mathbf{D}=\text{diag}(m_i)$, $\mathbf{W}$ binary adjacency). The prior is
+**improper** (rank-deficient): the sum $\sum_i u_i$ is not identified, so we
+centre $u$ after each MCMC sweep.
+
+### 55.4.3 Unstructured Heterogeneity
+
+$$
+v_i \mid \tau_v \overset{iid}{\sim} N(0,\, 1/\tau_v)
+$$
+
+This captures overdispersion not explained by spatial structure.
+
+### 55.4.4 Hyperpriors
+
+Conjugate Gamma priors on the precision parameters:
+$$
+\tau_u \sim \text{Gamma}(a_\tau,\, b_\tau), \qquad \tau_v \sim \text{Gamma}(a_\tau,\, b_\tau)
+$$
+
+Typical weakly informative values: $a_\tau = 1$, $b_\tau = 0.01$.
+
+### 55.4.5 MCMC Sampling
+
+The full conditionals motivate a **Metropolis-within-Gibbs** sampler:
+
+| Parameter | Update |
+|-----------|--------|
+| $u_i$ | Metropolis–Hastings with Gaussian random walk |
+| $v_i$ | Metropolis–Hastings with Gaussian random walk |
+| $\mu$ | Metropolis–Hastings |
+| $\tau_u$ | **Gibbs**: $\text{Gamma}(a+\frac{n-1}{2},\; b+\frac{1}{2}\mathbf{u}^\top\mathbf{Q}\mathbf{u})$ |
+| $\tau_v$ | **Gibbs**: $\text{Gamma}(a+\frac{n}{2},\; b+\frac{1}{2}\sum_i v_i^2)$ |
+
+The Gamma random deviate uses the **Marsaglia-Tsang (2000)** squeeze algorithm
+for exact simulation.
+
+```julia
+W, Q, m_i = build_adjacency(coords; threshold=2.5)
+bym = bym_fit(O, E, W, Q; n_iter=2000, n_warmup=500, rng=rng)
+# bym.rr: posterior mean relative risk per area
+# bym.dic: Deviance Information Criterion
+```
+
+### 55.4.6 Model Assessment: DIC
+
+The **Deviance Information Criterion** (Spiegelhalter et al., 2002):
+
+$$
+\text{DIC} = \bar{D}(\theta) + p_D
+$$
+
+where $\bar{D} = -2\,\text{E}_{\theta|y}[\log L]$ is the posterior mean deviance
+and $p_D = \bar{D} - D(\bar{\theta})$ is the effective number of parameters.
+Smaller DIC indicates better predictive performance.
+
+---
+
+## 55.5 Spatial Scan Statistics
+
+Kulldorff (1997) introduces a likelihood-based test for the null hypothesis of
+no geographic clustering (constant relative risk across all areas).
+
+### 55.5.1 Poisson Scan Statistic
+
+For each circular window $Z$ centred on candidate area $c$ with radius $r$:
+
+$$
+\text{LLR}(Z) = O_{in}\log\!\frac{O_{in}}{E_{in}} + O_{out}\log\!\frac{O_{out}}{E_{out}} - O\log\!\frac{O}{E}
+$$
+
+only when $O_{in}/E_{in} > O_{out}/E_{out}$ (excess inside).
+
+The **most likely cluster** $Z^* = \arg\max_Z \text{LLR}(Z)$ is tested via
+Monte Carlo: under $H_0$ generate $B$ datasets where $O_i \sim \text{Poisson}(E_i\bar\theta)$,
+compute $\text{LLR}_{(b)}$ for each, and:
+
+$$
+p = \frac{1+\#\{b: \text{LLR}_{(b)} \ge \text{LLR}(Z^*)\}}{B+1}
+$$
+
+```julia
+scans = spatial_scan(O, E, coords; max_pop_frac=0.4, n_sim=199, rng=rng)
+```
+
+### 55.5.2 Secondary Clusters
+
+After identifying $Z^*$, report secondary clusters (non-overlapping with $Z^*$)
+in order of decreasing LLR, with Monte Carlo p-values derived from the same
+simulated reference distribution.
+
+---
+
+## 55.6 North Dakota Application
+
+We simulate 40 ND counties with a northwest cluster (elevated risk $\approx 1.65$)
+and a mild east-west gradient (Fargo proximity):
+
+```julia
+bym = bym_fit(O, E, W, Q; n_iter=2000, n_warmup=500, rng=rng)
+println("DIC: $(bym.dic)  pD: $(bym.pd)")
+```
+
+Results comparison:
+
+| Method | Correlation with True RR | Comments |
+|--------|--------------------------|---------|
+| Raw SMR | 0.42 | High variance in small counties |
+| EB smoothed | 0.61 | Shrinks towards global mean |
+| BYM posterior mean | 0.74 | Borrows strength from neighbours |
+
+The BYM model consistently outperforms raw SMR because it borrows spatial
+strength: a county with suspiciously high SMR surrounded by low-SMR neighbours
+is partially pulled towards its neighbourhood mean.
+
+The spatial scan correctly identifies the northwest cluster with $p<0.01$
+(Monte Carlo 199 simulations).
+
+---
+
+## 55.7 Visualisation and Interpretation
+
+**Choropleth map design principles** (Brewer, 2015):
+
+- Use sequential colour schemes for rates (light = low, dark = high)
+- Show a companion map of standard errors to flag unreliable estimates
+- Report both raw SMR and smoothed estimates side-by-side
+- Label significant clusters separately
+
+**Common artefacts to report and mitigate:**
+
+| Artefact | Cause | Remedy |
+|----------|-------|--------|
+| High variance in rural areas | Small $E_i$ | EB or BYM smoothing |
+| "False" clusters from area size | Large areas look more extreme | Population cartogram |
+| Edge effects | Boundary areas have few neighbours | Include buffer |
+| Ecological fallacy | Area-level inference about individuals | Report at appropriate level |
+
+---
+
+## Summary
+
+| Method | Strengths | Limitations |
+|--------|-----------|-------------|
+| Raw SMR | Simple, unbiased | High variance for small areas |
+| EB Gamma-Poisson | Fast, reduces variance | Ignores spatial structure |
+| Kernel smoothing | Flexible | Bandwidth choice arbitrary |
+| BYM (MCMC) | Full spatial smoothing, uncertainty | Computational cost, MCMC convergence |
+| Spatial scan | Formal cluster test, p-value | Circular windows, max-fraction choice |
+
+---
+
+## Exercises
+
+1. Compute the EB estimates using both the Gamma-Poisson moment estimator and a
+   grid search maximising the marginal likelihood. Do the hyperparameter estimates agree?
+
+2. Implement a **LEROUX model** (Leroux et al., 1999) that mixes ICAR and
+   exchangeable random effects with a single mixing parameter $\rho$.
+
+3. Run the BYM model with 5 000 post-warm-up iterations. Compute the **posterior
+   exceedance probability** $P(\theta_i > 1.2 \mid \mathbf{y})$ for each area.
+
+4. Apply the spatial scan with both circular and **elliptic** scanning windows.
+   Does the shape of the detected cluster change?
+
+5. Download SEER cancer incidence data for a US state and apply the full disease
+   mapping pipeline: indirect standardisation → SMR → EB smoothing → BYM → scan.
+
+---
+
+## References
+
+- Besag, J., York, J., & Mollié, A. (1991). Bayesian image restoration with
+  two applications in spatial statistics. *Annals of the Institute of Statistical
+  Mathematics*, 43(1), 1–20.
+- Byar, D. P. (1979). Approximate confidence intervals for the relative risk.
+  In *Epidemiology in Medicine*. Little, Brown.
+- Clayton, D., & Kaldor, J. (1987). Empirical Bayes estimates of age-standardised
+  relative risks for use in disease mapping. *Biometrics*, 43(3), 671–681.
+- Kulldorff, M. (1997). A spatial scan statistic. *Communications in Statistics —
+  Theory and Methods*, 26(6), 1481–1496.
+- Marsaglia, G., & Tsang, W. W. (2000). A simple method for generating gamma
+  variables. *ACM Transactions on Mathematical Software*, 26(3), 363–372.
+- Spiegelhalter, D. J., et al. (2002). Bayesian measures of model complexity and fit.
+  *Journal of the Royal Statistical Society: Series B*, 64(4), 583–639.
