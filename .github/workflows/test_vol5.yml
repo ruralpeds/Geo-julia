@@ -1,0 +1,118 @@
+name: Vol 5 Tests
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths:
+      - "vol5_ml_production/**"
+      - ".github/workflows/test_vol5.yml"
+  pull_request:
+    paths:
+      - "vol5_ml_production/**"
+
+jobs:
+  test-healthcareml:
+    name: HealthcareML.jl — Julia ${{ matrix.julia-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ["1.10", "1.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Instantiate
+        run: |
+          julia --project=vol5_ml_production/packages/HealthcareML \
+            -e 'import Pkg; Pkg.instantiate()'
+      - name: Test HealthcareML
+        run: |
+          julia --project=vol5_ml_production/packages/HealthcareML \
+            -e 'import Pkg; Pkg.test()'
+
+  test-networkhealth:
+    name: NetworkHealth.jl — Julia ${{ matrix.julia-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ["1.10", "1.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Instantiate
+        run: |
+          julia --project=vol5_ml_production/packages/NetworkHealth \
+            -e 'import Pkg; Pkg.instantiate()'
+      - name: Test NetworkHealth
+        run: |
+          julia --project=vol5_ml_production/packages/NetworkHealth \
+            -e 'import Pkg; Pkg.test()'
+
+  test-temporalhealth:
+    name: TemporalHealth.jl — Julia ${{ matrix.julia-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ["1.10", "1.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Instantiate
+        run: |
+          julia --project=vol5_ml_production/packages/TemporalHealth \
+            -e 'import Pkg; Pkg.instantiate()'
+      - name: Test TemporalHealth
+        run: |
+          julia --project=vol5_ml_production/packages/TemporalHealth \
+            -e 'import Pkg; Pkg.test()'
+
+  test-integration:
+    name: Vol 5 Integration Tests
+    runs-on: ubuntu-latest
+    needs: [test-healthcareml, test-networkhealth, test-temporalhealth]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.10"
+      - uses: julia-actions/cache@v2
+      - name: Instantiate all packages
+        run: |
+          for pkg in HealthcareML NetworkHealth TemporalHealth; do
+            julia --project=vol5_ml_production/packages/$pkg \
+              -e 'import Pkg; Pkg.instantiate()'
+          done
+      - name: Run integration tests
+        run: |
+          julia --project=vol5_ml_production/packages/HealthcareML \
+            vol5_ml_production/test/integration_test.jl
+        env:
+          JULIA_NUM_THREADS: "2"
+
+  docs-build:
+    name: Documentation Build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.10"
+      - uses: julia-actions/cache@v2
+      - name: Install Documenter
+        run: |
+          julia -e 'import Pkg; Pkg.add("Documenter")'
+      - name: Build docs
+        run: |
+          julia vol5_ml_production/docs/make.jl || true
+        # || true: docs build allowed to fail if packages not all loaded

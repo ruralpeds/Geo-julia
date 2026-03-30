@@ -1,0 +1,23 @@
+[workspace]
+packages = [
+    "packages/HealthcareML",
+    "packages/NetworkHealth",
+    "packages/TemporalHealth",
+]
+
+[deps]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+DataFrames = "a93c6f00-e57d-5684-b466-afe8fa294f15"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+JSON3 = "0f8b85d8-7e73-4b43-9ea0-90b478853c4c"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+StatsBase = "2913bbd2-ae8a-5f71-8cce-781a0cdc6517"
+
+[compat]
+julia = "1.10"
+DataFrames = "1"
+StatsBase = "0.33, 0.34"
+JSON3 = "1"
