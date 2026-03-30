@@ -1,0 +1,117 @@
+name: Vol 11 — Causal Inference & Policy Evaluation Tests
+
+on:
+  push:
+    paths:
+      - 'vol11_causal_inference/**'
+      - '.github/workflows/test_vol11.yml'
+  pull_request:
+    paths:
+      - 'vol11_causal_inference/**'
+      - '.github/workflows/test_vol11.yml'
+
+jobs:
+  test-causalinference:
+    name: CausalInference.jl (Julia ${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run CausalInference tests
+        run: |
+          julia --project=. -e '
+            using Test
+            include("vol11_causal_inference/packages/CausalInference/test/runtests.jl")
+          '
+
+  test-policyeval:
+    name: PolicyEval.jl (Julia ${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run PolicyEval tests
+        run: |
+          julia --project=. -e '
+            using Test
+            include("vol11_causal_inference/packages/PolicyEval/test/runtests.jl")
+          '
+
+  test-spatialcausal:
+    name: SpatialCausal.jl (Julia ${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run SpatialCausal tests
+        run: |
+          julia --project=. -e '
+            using Test
+            include("vol11_causal_inference/packages/SpatialCausal/test/runtests.jl")
+          '
+
+  test-integration:
+    name: Vol 11 Integration Tests (Julia ${{ matrix.julia-version }})
+    runs-on: ubuntu-latest
+    needs: [test-causalinference, test-policyeval, test-spatialcausal]
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ['1.10', '1.11']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - name: Run integration tests
+        run: |
+          julia --project=. -e '
+            using Test
+            include("vol11_causal_inference/test/integration_test.jl")
+          '
+
+  vol11-status:
+    name: Vol 11 Status
+    runs-on: ubuntu-latest
+    needs: [test-causalinference, test-policyeval, test-spatialcausal, test-integration]
+    if: always()
+    steps:
+      - name: Report status
+        run: |
+          echo "======================================================"
+          echo "  Vol 11 — Causal Inference: Test Summary"
+          echo "======================================================"
+          echo "  CausalInference: ${{ needs.test-causalinference.result }}"
+          echo "  PolicyEval:      ${{ needs.test-policyeval.result }}"
+          echo "  SpatialCausal:   ${{ needs.test-spatialcausal.result }}"
+          echo "  Integration:     ${{ needs.test-integration.result }}"
+          echo "======================================================"
+          if [[ "${{ needs.test-causalinference.result }}" != "success" ||
+                "${{ needs.test-policyeval.result }}"      != "success" ||
+                "${{ needs.test-spatialcausal.result }}"   != "success" ||
+                "${{ needs.test-integration.result }}"     != "success" ]]; then
+            echo "  RESULT: FAILED"; exit 1
+          fi
+          echo "  RESULT: ALL PASSED"

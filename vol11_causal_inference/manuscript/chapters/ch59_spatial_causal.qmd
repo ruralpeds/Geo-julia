@@ -1,0 +1,292 @@
+---
+title: "Chapter 59: Spatial Causal Inference"
+subtitle: "Spatial DiD · Conley SE · Geographic Instrumental Variables"
+author: "Open Healthcare Textbook"
+format:
+  html:
+    toc: true
+    code-fold: true
+    theme: cosmo
+  pdf:
+    toc: true
+    number-sections: true
+---
+
+## Learning Objectives
+
+After completing this chapter you should be able to:
+
+- Extend difference-in-differences to settings with spatially defined treatment areas and spillover zones
+- Compute Conley (1999) spatial HAC standard errors robust to spatial autocorrelation
+- Use geographic features (distance to facilities) as instrumental variables in 2SLS
+- Test for instrument strength and interpret 2SLS estimates causally
+- Decompose treatment effects into direct and indirect (spillover) components
+
+---
+
+## 59.1 Why Spatial Structure Matters for Causal Inference
+
+Standard causal inference methods assume **independent** observations or at most
+clustered dependence (within units over time). In geographic health studies:
+
+1. **Spatial autocorrelation** in outcomes violates OLS standard error assumptions
+2. **Treatment spillovers** mean the stable unit treatment value assumption (SUTVA)
+   may fail — residents near (but outside) treatment zones may also be affected
+3. **Geographic instruments** exploit exogenous variation in spatial exposure
+
+Ignoring spatial dependence leads to **anti-conservative inference** (underestimated
+standard errors) and **biased effect estimates** if spillovers contaminate the
+control group.
+
+---
+
+## 59.2 Spatial Difference-in-Differences
+
+### 59.2.1 Spatial Treatment Assignment
+
+Given $K$ treatment sites and a study area, define spatial treatment zones:
+
+- **Treated** ($D_i = 1$): unit $i$ within distance $r$ of any site
+- **Spillover** ($S_i = 1$): unit $i$ within buffer $(r, r+b]$ of any site
+- **Pure control** ($D_i = S_i = 0$): unit $i$ beyond distance $r+b$
+
+### 59.2.2 Three-Group DiD
+
+The extended DiD regression:
+$$
+Y_{it} = \alpha_i + \gamma_t + \tau D_i \cdot \text{Post}_t + \phi S_i \cdot \text{Post}_t + \varepsilon_{it}
+$$
+
+- $\tau$ = **direct effect**: impact on units within treatment radius
+- $\phi$ = **spillover effect**: impact on units in buffer zone
+- Pure controls provide the counterfactual trend
+
+```julia
+res = spatial_did(y, coords, post, treatment_sites;
+                  radius=1.5, buffer=1.0, unit_ids=unit_ids)
+sd  = spillover_decomposition(res)
+println("Direct: $(res.β_direct)  Spillover: $(res.β_spillover)")
+println("Spillover/Direct ratio: $(sd.ratio)")
+```
+
+### 59.2.3 Choosing Radius and Buffer
+
+The treatment radius $r$ is typically set by:
+- Domain knowledge (e.g., $r = 30$-minute drive time)
+- Sensitivity analysis: try $r \in \{1, 2, 5\}$ km
+- Data-driven: $r$ maximises first-stage F-statistic in IV setting
+
+Buffer $b$ is chosen to capture the most likely spillover range. As $b \to \infty$,
+the design degenerates to the standard 2-group DiD; as $b \to 0$, there is no
+spillover zone.
+
+### 59.2.4 Validity Concerns
+
+- **Compound treatment**: if policy delivers both facility access (D=1) and information
+  campaigns (spillover), $\tau$ and $\phi$ conflate multiple mechanisms
+- **Spatial selection**: if treated units differ systematically from controls in
+  pre-existing trends, parallel trends may fail — check with spatial event study
+- **SUTVA violation**: if distance is mismeasured (e.g., straight-line vs road network),
+  treatment assignment is noisy
+
+---
+
+## 59.3 Conley Spatial HAC Standard Errors
+
+### 59.3.1 Motivation
+
+When errors are spatially autocorrelated, OLS standard errors:
+$$
+\hat{V}_{OLS} = \hat{\sigma}^2 (\mathbf{X}^\top\mathbf{X})^{-1}
+$$
+are inconsistent. Conley (1999) provides a heteroskedasticity- and
+autocorrelation-consistent (HAC) sandwich estimator allowing for spatial
+correlation up to distance $d_c$.
+
+### 59.3.2 The Sandwich Estimator
+
+$$
+\hat{V}_{Conley} = (\mathbf{X}^\top\mathbf{X})^{-1} \hat{\mathbf{\Omega}} (\mathbf{X}^\top\mathbf{X})^{-1}
+$$
+
+where the spatial meat is:
+$$
+\hat{\mathbf{\Omega}} = \frac{1}{n} \sum_{i=1}^n \sum_{j=1}^n K\!\left(\frac{d_{ij}}{d_c}\right) \hat{\varepsilon}_i \hat{\varepsilon}_j \mathbf{x}_i \mathbf{x}_j^\top
+$$
+
+and $K(u)$ is a kernel function (Bartlett: $K(u) = \max(0, 1-|u|)$).
+
+```julia
+cr = conley_se(y, X, coords; cutoff=50.0)  # 50 km cutoff
+println("OLS SE:    $(cr.se_ols)")
+println("Conley SE: $(cr.se_conley)")
+println("Inflation: $(cr.se_conley ./ cr.se_ols)")
+```
+
+### 59.3.3 Bandwidth Choice
+
+The spatial bandwidth $d_c$ should capture the range of spatial autocorrelation
+in residuals. Options:
+
+1. **Domain knowledge**: 30-minute drive time ≈ 30 km in rural ND
+2. **Variogram of residuals**: find the range parameter $r$ and set $d_c = 2r$
+3. **Over-coverage**: use a conservatively large $d_c$ (e.g., $d_c = $ median inter-unit distance)
+4. **Optimal cutoff** (Müller & Watson, 2022): data-driven selection
+
+SE inflation (Conley / OLS) is often 1.2–2.0× in regional health data. Ignoring
+spatial autocorrelation can make results appear statistically significant when
+they are not.
+
+---
+
+## 59.4 Geographic Instrumental Variables
+
+### 59.4.1 The IV Relevance–Exclusion Framework
+
+A valid instrument $Z$ for endogenous treatment $D$ must satisfy:
+
+1. **Relevance**: $\text{Cov}(Z, D) \ne 0$ (instrument moves the endogenous variable)
+2. **Exclusion**: $Z \perp Y(d)$ for all $d$ (no direct effect on outcome)
+3. **LATE interpretation**: effect identified for *compliers* — units whose
+   treatment status is changed by the instrument
+
+### 59.4.2 Distance as an Instrument
+
+Historical facility locations (pre-dating the outcome) are commonly used:
+$$
+Z_i = g(\text{distance from unit } i \text{ to historical facilities})
+$$
+
+Examples:
+- Inverse distance to nearest historical clinic
+- Indicator for historical facility within 30 km
+- Gravitational access score: $Z_i = \sum_k 1/d_{ik}^\beta$
+
+**Exclusion restriction** holds if historical locations are not directly related
+to current health outcomes except through current access. This may fail if
+historical locations reflect persistent deprivation (Noria & Rocca, 2019).
+
+### 59.4.3 Two-Stage Least Squares
+
+**First stage**: $D_i = Z_i \gamma + \mathbf{X}_i^\top \boldsymbol{\delta} + \nu_i$
+$$
+\hat{D}_i = \hat{Z}_i \hat{\gamma} + \mathbf{X}_i^\top \hat{\boldsymbol{\delta}}
+$$
+
+**Second stage**: $Y_i = \hat{D}_i \tau + \mathbf{X}_i^\top \boldsymbol{\beta} + \varepsilon_i$
+$$
+\hat{\tau}_{2SLS} = (\mathbf{X}_{endog}^\top \hat{\mathbf{X}}_{endog})^{-1} \mathbf{X}_{endog}^\top \mathbf{Y}
+$$
+
+where $\hat{\mathbf{X}}_{endog}$ contains predicted treatment from first stage.
+
+```julia
+gr = geo_iv_2sls(y, D, Z, X; instrument_name="hist_clinic_distance")
+wt = weak_instrument_test(gr)
+println("First-stage F: $(gr.f_stat)  Weak: $(wt.weak)")
+```
+
+### 59.4.4 Weak Instrument Diagnosis
+
+The first-stage F-statistic tests $H_0: \gamma = 0$. Stock & Yogo (2005) rule of thumb:
+
+| F-stat | Assessment |
+|--------|-----------|
+| $> 10$ | Strong instrument (5% maximal IV size) |
+| $5$–$10$ | Moderate — report weak-instrument-robust CI |
+| $< 5$   | Weak — 2SLS severely biased; use LIML or Anderson-Rubin CI |
+
+With multiple instruments, use the Cragg-Donald statistic.
+
+### 59.4.5 LATE vs ATE
+
+The 2SLS estimator recovers the **Local Average Treatment Effect** (LATE):
+the effect for **compliers** — units that take up treatment when given the
+instrument but would not otherwise (Imbens & Angrist, 1994).
+
+$$
+\tau_{LATE} = \frac{\text{Reduced form effect}(Z \to Y)}{\text{First stage effect}(Z \to D)}
+$$
+
+If the complier population is representative, LATE ≈ ATE. In geographic IV
+settings, compliers are typically units that are marginally close to historical
+facilities — may differ from the general population.
+
+---
+
+## 59.5 ND Facility Expansion Application
+
+We evaluate the effect of 3 new clinics on county health access scores in ND:
+
+```julia
+res = spatial_did(y, coords, post, clinic_sites; radius=1.5, buffer=1.3)
+cr  = conley_se(ols_y, ols_X, ols_coords; cutoff=2.0)
+gr  = geo_iv_2sls(iv_y, D, Z, iv_X; instrument_name="hist_clinic_access")
+```
+
+Summary of results:
+
+| Method | Estimate | Notes |
+|--------|----------|-------|
+| Spatial DiD (direct) | 5.1 | Counties within 1.5° of clinic |
+| Spatial DiD (spillover) | 1.7 | Counties 1.5°–2.8° away |
+| Conley SE inflation | 1.4× | Relative to OLS SE |
+| 2SLS IV τ̂ | 5.8 | Historical clinics as IV; F=24 |
+
+The Conley correction increases SEs by 1.4×, changing the significance of
+secondary covariates. The 2SLS estimate is larger than naïve OLS (6.2), confirming
+that counties with poorer health access received more facilities (negative
+endogeneity bias in OLS).
+
+---
+
+## 59.6 Checklist for Spatial Causal Analysis
+
+1. **Map treatment zones** — visualise treatment/spillover/control areas
+2. **Check overlap** — do treated and control areas have similar baseline characteristics?
+3. **Estimate Conley bandwidth** from residual variogram (or use conservative $d_c$)
+4. **Report OLS and Conley SE** side by side — flag large inflations
+5. **Test weak instruments** before reporting 2SLS
+6. **Sensitivity analysis** — vary radius, buffer, bandwidth, and polynomial order
+7. **Report LATE population** — describe who the compliers are
+
+---
+
+## Summary
+
+| Method | Standard errors | Effect identified | Key assumption |
+|--------|-----------------|-------------------|----------------|
+| Spatial DiD | Clustered by unit | Direct + spillover | Parallel trends + SUTVA restricted |
+| Conley HAC | Spatial kernel SE | OLS β (associations) | Stationarity, error independence beyond $d_c$ |
+| Geographic IV | 2SLS sandwich | LATE (compliers) | Exclusion restriction |
+
+---
+
+## Exercises
+
+1. Extend `spatial_did` to allow **ring-dose response**: instead of binary
+   treatment/spillover, compute a continuous dose as $1/d_i^\alpha$ weighted average.
+
+2. Implement the **Moran's I test** on OLS residuals to determine whether
+   Conley SE correction is needed before running it.
+
+3. Construct a **geographic regression discontinuity** using distance to the
+   nearest facility as the running variable at threshold $d_0$.
+
+4. Apply geographic IV to evaluate whether proximity to the 1965 Hill-Burton
+   hospital locations (historical) affects current cardiovascular mortality.
+   Download AHA hospital location data and county health rankings.
+
+---
+
+## References
+
+- Conley, T. G. (1999). GMM estimation with cross sectional dependence.
+  *Journal of Econometrics*, 92(1), 1–45.
+- Imbens, G. W., & Angrist, J. D. (1994). Identification and estimation of
+  local average treatment effects. *Econometrica*, 62(2), 467–475.
+- Müller, U. K., & Watson, M. W. (2022). Spatial correlation robust inference.
+  *Econometrica*, 90(6), 2901–2935.
+- Stock, J. H., & Yogo, M. (2005). Testing for weak instruments in linear IV
+  regression. In *Identification and Inference for Econometric Models*,
+  Cambridge University Press.
