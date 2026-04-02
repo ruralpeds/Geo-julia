@@ -14,303 +14,307 @@ This chapter assembles every component built in Volumes I through IV into a sing
 ```julia
 # === pipeline/01_acquire_data.jl ===
 # Run once to download and cache all required data
+
 using HTTP, CSV, DataFrames, Shapefile, JSON
 using Dates
+
 const ND_FIPS   = "38"
 const DATA_DIR  = joinpath(@__DIR__, "../data")
 const RAW_DIR   = joinpath(DATA_DIR, "raw")
 const PROC_DIR  = joinpath(DATA_DIR, "processed")
 mkpath.([ RAW_DIR, PROC_DIR ])
+
 # ── 1. TIGER/Line county boundaries for North Dakota ─────────
 function acquire_tiger_counties(year=2023)
-dest = joinpath(RAW_DIR, "tl_$(year)_38_county.zip")
-isfile(dest) && return dest
-url = "https://www2.census.gov/geo/tiger/TIGER$(year)/COUNTY/" *
-"tl_$(year)_38_county.zip"
-@info "Downloading ND county boundaries..."
-write(dest, HTTP.get(url).body)
-dest
+    dest = joinpath(RAW_DIR, "tl_$(year)_38_county.zip")
+    isfile(dest) && return dest
+    url = "https://www2.census.gov/geo/tiger/TIGER$(year)/COUNTY/" *
+          "tl_$(year)_38_county.zip"
+    @info "Downloading ND county boundaries..."
+    write(dest, HTTP.get(url).body)
+    dest
 end
+
 # ── 2. ACS 5-year estimates (poverty, uninsurance) ───────────
 function acquire_acs_nd(year=2022)
-dest = joinpath(RAW_DIR, "acs5_nd_$(year).csv")
-isfile(dest) && return DataFrame(CSV.File(dest))
-api_key = get(ENV, "CENSUS_API_KEY", "")
-vars = "B27001_001E,B27001_017E,B27001_033E," *  # uninsurance
-"B17001_001E,B17001_002E,"              *  # poverty
-"B01003_001E"                              # total pop
-url = "https://api.census.gov/data/$(year)/acs/acs5" *
-"?get=NAME,$(vars)&for=county:*&in=state:38" *
-(isempty(api_key) ? "" : "&key=$(api_key)")
-resp = JSON.parse(String(HTTP.get(url).body))
-headers = Symbol.(resp[1])
-df = DataFrame([Dict(headers[j]=>resp[i][j] for j in 1:length(headers))
-for i in 2:length(resp)])
-df.GEOID = rpad.(df.state,2,'0') .* rpad.(df.county,3,'0')
-```
+    dest = joinpath(RAW_DIR, "acs5_nd_$(year).csv")
+    isfile(dest) && return DataFrame(CSV.File(dest))
 
-CSV.write(dest, df)
+    api_key = get(ENV, "CENSUS_API_KEY", "")
+    vars = "B27001_001E,B27001_017E,B27001_033E," *  # uninsurance
+           "B17001_001E,B17001_002E,"              *  # poverty
+           "B01003_001E"                              # total pop
+    url = "https://api.census.gov/data/$(year)/acs/acs5" *
+          "?get=NAME,$(vars)&for=county:*&in=state:38" *
+          (isempty(api_key) ? "" : "&key=$(api_key)")
 
-```julia
-@info "ACS data saved: $(nrow(df)) counties"
-df
+    resp = JSON.parse(String(HTTP.get(url).body))
+    headers = Symbol.(resp[1])
+    df = DataFrame([Dict(headers[j]=>resp[i][j] for j in 1:length(headers))
+                    for i in 2:length(resp)])
+    df.GEOID = rpad.(df.state,2,'0') .* rpad.(df.county,3,'0')
+
+    CSV.write(dest, df)
+    @info "ACS data saved: $(nrow(df)) counties"
+    df
 end
+
 # ── 3. AHRF — primary care physician counts ──────────────────
 function acquire_nd_physicians()
-# Download AHRF from HRSA (requires manual download step due to auth)
-# Providing a curated extract of key variables for ND
-dest = joinpath(RAW_DIR, "nd_physicians.csv")
-isfile(dest) && return DataFrame(CSV.File(dest))
-# HRSA AHRF API endpoint (county-level physician data)
-url = "https://data.hrsa.gov/DataDownload/DD_Files/AHRF_County.csv"
-@info "Downloading AHRF county data (may be large)..."
-full_ahrf = CSV.read(IOBuffer(HTTP.get(url; readtimeout=300).body), DataFrame)
-# Filter to North Dakota and select key variables
-nd_vars = [:f00011, :f04437, :f1522086, :f1522166, :f0453048]
-# f00011=FIPS, f04437=county name, f1522086=PCP per 100k, f1522166=RUCC, f0453048=pop
-nd = filter(r->startswith(string(r.f00011), "38"), full_ahrf)
-```
+    # Download AHRF from HRSA (requires manual download step due to auth)
+    # Providing a curated extract of key variables for ND
+    dest = joinpath(RAW_DIR, "nd_physicians.csv")
+    isfile(dest) && return DataFrame(CSV.File(dest))
 
-CSV.write(dest, select(nd, intersect(nd_vars, propertynames(full_ahrf))))
+    # HRSA AHRF API endpoint (county-level physician data)
+    url = "https://data.hrsa.gov/DataDownload/DD_Files/AHRF_County.csv"
+    @info "Downloading AHRF county data (may be large)..."
+    full_ahrf = CSV.read(IOBuffer(HTTP.get(url; readtimeout=300).body), DataFrame)
 
-nd
-
-```julia
+    # Filter to North Dakota and select key variables
+    nd_vars = [:f00011, :f04437, :f1522086, :f1522166, :f0453048]
+    # f00011=FIPS, f04437=county name, f1522086=PCP per 100k, f1522166=RUCC, f0453048=pop
+    nd = filter(r->startswith(string(r.f00011), "38"), full_ahrf)
+    CSV.write(dest, select(nd, intersect(nd_vars, propertynames(full_ahrf))))
+    nd
 end
+
 # ── 4. CMS Provider Locator — physician locations ─────────────
 function acquire_nd_provider_locations()
-dest = joinpath(RAW_DIR, "nd_providers.csv")
-isfile(dest) && return DataFrame(CSV.File(dest))
-# NPPES NPI Registry bulk download (National Provider Identifier)
-# Filter to ND primary care physicians
-url = "https://npiregistry.cms.hhs.gov/api/?" *
-"state=ND&taxonomy_description=Family+Medicine&limit=200&skip=0"
-resp = JSON.parse(String(HTTP.get(url).body))
-providers = resp["results"]
-rows = [(npi=p["number"],
-first_name=get(p["basic"],"first_name",""),
-last_name=get(p["basic"],"last_name",""),
-city=get(p["addresses"][1],"city",""),
-state=get(p["addresses"][1],"state",""),
-zip=get(p["addresses"][1],"postal_code",""),
-street=get(p["addresses"][1],"address_1",""))
-for p in providers
-if !isempty(get(p,"addresses",[]))]
-df = DataFrame(rows)
-df.id = 1:nrow(df)  # Geocoder requires :id column
-```
+    dest = joinpath(RAW_DIR, "nd_providers.csv")
+    isfile(dest) && return DataFrame(CSV.File(dest))
 
-CSV.write(dest, df)
+    # NPPES NPI Registry bulk download (National Provider Identifier)
+    # Filter to ND primary care physicians
+    url = "https://npiregistry.cms.hhs.gov/api/?" *
+          "state=ND&taxonomy_description=Family+Medicine&limit=200&skip=0"
+    resp = JSON.parse(String(HTTP.get(url).body))
+    providers = resp["results"]
 
+    rows = [(npi=p["number"],
+             first_name=get(p["basic"],"first_name",""),
+             last_name=get(p["basic"],"last_name",""),
+             city=get(p["addresses"][1],"city",""),
+             state=get(p["addresses"][1],"state",""),
+             zip=get(p["addresses"][1],"postal_code",""),
+             street=get(p["addresses"][1],"address_1",""))
+             for p in providers
+             if !isempty(get(p,"addresses",[]))]
 
-### 29.1.2 Geocoding and Spatial Preparation Layer
-
-```julia
-@info "Found $(nrow(df)) primary care providers in ND"
-df
+    df = DataFrame(rows)
+    df.id = 1:nrow(df)  # Geocoder requires :id column
+    CSV.write(dest, df)
+    @info "Found $(nrow(df)) primary care providers in ND"
+    df
 end
+
 # ── Run all acquisition steps ─────────────────────────────────
 tiger_path = acquire_tiger_counties()
 acs_df     = acquire_acs_nd()
 ahrf_df    = acquire_nd_physicians()
 prov_df    = acquire_nd_provider_locations()
 @info "Data acquisition complete."
-# === pipeline/02_prepare_spatial.jl ===
-using Geocode, Shapefile, GeoInterface, DataFrames, CSV
-# ── Geocode provider addresses ────────────────────────────────
-function geocode_providers(prov_df)
-dest = joinpath(PROC_DIR, "providers_geocoded.csv")
-isfile(dest) && return DataFrame(CSV.File(dest))
-g = CensusGeocoder()
-geocoded = geocode_all(g, prov_df; batch_size=500, verbose=true)
-# Keep only successfully geocoded providers
-valid = filter(r -> !ismissing(r.lat) && !ismissing(r.lon), geocoded)
-@info "Geocoded $(nrow(valid))/$(nrow(geocoded)) providers"
 ```
 
-CSV.write(dest, valid)
 
-valid
+### 29.1.2 Geocoding and Spatial Preparation Layer
+
+```julia
+# === pipeline/02_prepare_spatial.jl ===
+using Geocode, Shapefile, GeoInterface, DataFrames, CSV
+
+# ── Geocode provider addresses ────────────────────────────────
+function geocode_providers(prov_df)
+    dest = joinpath(PROC_DIR, "providers_geocoded.csv")
+    isfile(dest) && return DataFrame(CSV.File(dest))
+
+    g = CensusGeocoder()
+    geocoded = geocode_all(g, prov_df; batch_size=500, verbose=true)
+
+    # Keep only successfully geocoded providers
+    valid = filter(r -> !ismissing(r.lat) && !ismissing(r.lon), geocoded)
+    @info "Geocoded $(nrow(valid))/$(nrow(geocoded)) providers"
+    CSV.write(dest, valid)
+    valid
+end
+
+# ── Load county geometries and build spatial data ─────────────
+function load_nd_counties()
+    tbl  = Shapefile.Table(joinpath(RAW_DIR, "tl_2023_38_county.shp"))
+    df   = DataFrame(tbl)
+    df.geom = Shapefile.shapes(tbl)
+    df.GEOID = df.STATEFP .* df.COUNTYFP
+
+    # Compute county centroids for KNN and 2SFCA
+    df.centroid_lon = [GeoInterface.coordinates(GeoInterface.centroid(g))[1]
+                        for g in df.geom]
+    df.centroid_lat = [GeoInterface.coordinates(GeoInterface.centroid(g))[2]
+                        for g in df.geom]
+    df
+end
+
+# ── Merge all data onto county geometries ─────────────────────
+function build_analysis_dataset(counties, acs, ahrf, providers_geo)
+    # Join ACS insurance data
+    acs_clean = select(acs,
+        :GEOID,
+        :B01003_001E => (x->parse.(Float64,x)) => :total_pop,
+        :B17001_002E => (x->parse.(Float64,x)) => :in_poverty,
+        :B27001_017E => (x->parse.(Float64,x)) => :uninsured)
+    acs_clean.poverty_pct = 100 .* acs_clean.in_poverty ./ acs_clean.total_pop
+    acs_clean.uninsured_pct = 100 .* acs_clean.uninsured ./ acs_clean.total_pop
+
+    # Build provider supply DataFrame for 2SFCA
+    prov_supply = DataFrame(
+        lat     = Float64.(providers_geo.lat),
+        lon     = Float64.(providers_geo.lon),
+        supply  = ones(Float64, nrow(providers_geo))  # 1 FTE per provider
+    )
+
+    # Merge everything onto counties
+    merged = leftjoin(counties, acs_clean; on=:GEOID)
+    merged
+end
+```
 
 
 ### 29.1.3 Spatial Analysis Layer
 
 ```julia
-end
-# ── Load county geometries and build spatial data ─────────────
-function load_nd_counties()
-tbl  = Shapefile.Table(joinpath(RAW_DIR, "tl_2023_38_county.shp"))
-df   = DataFrame(tbl)
-df.geom = Shapefile.shapes(tbl)
-df.GEOID = df.STATEFP .* df.COUNTYFP
-# Compute county centroids for KNN and 2SFCA
-df.centroid_lon = [GeoInterface.coordinates(GeoInterface.centroid(g))[1]
-for g in df.geom]
-df.centroid_lat = [GeoInterface.coordinates(GeoInterface.centroid(g))[2]
-for g in df.geom]
-df
-end
-# ── Merge all data onto county geometries ─────────────────────
-function build_analysis_dataset(counties, acs, ahrf, providers_geo)
-# Join ACS insurance data
-acs_clean = select(acs,
-:GEOID,
-:B01003_001E => (x->parse.(Float64,x)) => :total_pop,
-:B17001_002E => (x->parse.(Float64,x)) => :in_poverty,
-:B27001_017E => (x->parse.(Float64,x)) => :uninsured)
-acs_clean.poverty_pct = 100 .* acs_clean.in_poverty ./ acs_clean.total_pop
-acs_clean.uninsured_pct = 100 .* acs_clean.uninsured ./ acs_clean.total_pop
-# Build provider supply DataFrame for 2SFCA
-prov_supply = DataFrame(
-lat     = Float64.(providers_geo.lat),
-lon     = Float64.(providers_geo.lon),
-supply  = ones(Float64, nrow(providers_geo))  # 1 FTE per provider
-)
-# Merge everything onto counties
-merged = leftjoin(counties, acs_clean; on=:GEOID)
-merged
-end
 # === pipeline/03_spatial_analysis.jl ===
 using SpatialStats, DataFrames, Statistics
+
 function run_spatial_analysis(nd_df)
-n = nrow(nd_df)
-# ── Build spatial weights ──────────────────────────────────
-@info "Building queen contiguity weights for $(n) counties..."
-w = queen_weights(nd_df.geom)
-@info "Mean neighbors: $(round(w.mean_neighbors; digits=2))"
-# ── E2SFCA primary care accessibility ─────────────────────
-@info "Computing E2SFCA accessibility scores..."
-pop_locs = DataFrame(
-id         = 1:n,
-lat        = nd_df.centroid_lat,
-lon        = nd_df.centroid_lon,
-population = coalesce.(nd_df.total_pop, 0.0)
-)
-prov_locs = CSV.read(joinpath(PROC_DIR,"providers_geocoded.csv"), DataFrame)
-providers = DataFrame(
-lat    = Float64.(prov_locs.lat),
-lon    = Float64.(prov_locs.lon),
-supply = ones(Float64, nrow(prov_locs))
-)
-# Gaussian decay E2SFCA with 45-minute drive equivalent (~50km rural)
-access = e2sfca(providers, pop_locs, 50.0;
-decay = :gaussian, sigma_km = 20.0)
-nd_df.access_score = access.accessibility
-# ── Moran's I for key variables ───────────────────────────
-vars_to_test = [:access_score, :poverty_pct, :uninsured_pct]
-moran_results = Dict{Symbol, Any}()
-for var in vars_to_test
-vals = coalesce.(nd_df[!, var], median(skipmissing(nd_df[!, var])))
-moran_results[var] = moran(Float64.(vals), w)
-@info "Moran's I ($(var)) = $(round(moran_results[var].I; digits=4)), " *
-"p = $(round(moran_results[var].p_value; digits=4))"
+    n = nrow(nd_df)
+
+    # ── Build spatial weights ──────────────────────────────────
+    @info "Building queen contiguity weights for $(n) counties..."
+    w = queen_weights(nd_df.geom)
+    @info "Mean neighbors: $(round(w.mean_neighbors; digits=2))"
+
+    # ── E2SFCA primary care accessibility ─────────────────────
+    @info "Computing E2SFCA accessibility scores..."
+    pop_locs = DataFrame(
+        id         = 1:n,
+        lat        = nd_df.centroid_lat,
+        lon        = nd_df.centroid_lon,
+        population = coalesce.(nd_df.total_pop, 0.0)
+    )
+    prov_locs = CSV.read(joinpath(PROC_DIR,"providers_geocoded.csv"), DataFrame)
+    providers = DataFrame(
+        lat    = Float64.(prov_locs.lat),
+        lon    = Float64.(prov_locs.lon),
+        supply = ones(Float64, nrow(prov_locs))
+    )
+    # Gaussian decay E2SFCA with 45-minute drive equivalent (~50km rural)
+    access = e2sfca(providers, pop_locs, 50.0;
+                    decay = :gaussian, sigma_km = 20.0)
+    nd_df.access_score = access.accessibility
+
+    # ── Moran's I for key variables ───────────────────────────
+    vars_to_test = [:access_score, :poverty_pct, :uninsured_pct]
+    moran_results = Dict{Symbol, Any}()
+    for var in vars_to_test
+        vals = coalesce.(nd_df[!, var], median(skipmissing(nd_df[!, var])))
+        moran_results[var] = moran(Float64.(vals), w)
+        @info "Moran's I ($(var)) = $(round(moran_results[var].I; digits=4)), " *
+              "p = $(round(moran_results[var].p_value; digits=4))"
+    end
+
+    # ── LISA cluster analysis ─────────────────────────────────
+    @info "Computing LISA clusters for access scores..."
+    access_vals = Float64.(coalesce.(nd_df.access_score, 0.0))
+    lisa_result = moran_local(access_vals, w;
+                               permutations=999, alpha=0.05)
+    nd_df.lisa_cluster = lisa_result.cluster
+    nd_df.lisa_p_value = lisa_result.p_values
+
+    counts = cluster_counts(lisa_result)
+    @info "LISA clusters: HH=$(counts[:HH]) LL=$(counts[:LL]) " *
+          "HL=$(counts[:HL]) LH=$(counts[:LH]) NS=$(counts[:NS])"
+
+    # ── Spatial regression: access ~ poverty + rurality ───────
+    @info "Fitting spatial lag model..."
+    y = access_vals
+    # Design matrix: intercept + poverty + RUCC (rural-urban continuum code)
+    X = hcat(
+        ones(n),
+        Float64.(coalesce.(nd_df.poverty_pct, median(skipmissing(nd_df.poverty_pct)))),
+        Float64.(coalesce.(nd_df.RUCC,        5.0))  # Default to mid-rural
+    )
+    slm_result = slm(y, X, w)
+    @info "SLM ρ = $(round(slm_result.rho; digits=3)), AIC = $(round(slm_result.AIC; digits=1))"
+
+    return (nd_df=nd_df, w=w, moran_results=moran_results,
+            lisa=lisa_result, slm=slm_result)
 end
-# ── LISA cluster analysis ─────────────────────────────────
-@info "Computing LISA clusters for access scores..."
-access_vals = Float64.(coalesce.(nd_df.access_score, 0.0))
-lisa_result = moran_local(access_vals, w;
-permutations=999, alpha=0.05)
-nd_df.lisa_cluster = lisa_result.cluster
-nd_df.lisa_p_value = lisa_result.p_values
-counts = cluster_counts(lisa_result)
-@info "LISA clusters: HH=$(counts[:HH]) LL=$(counts[:LL]) " *
-"HL=$(counts[:HL]) LH=$(counts[:LH]) NS=$(counts[:NS])"
-# ── Spatial regression: access ~ poverty + rurality ───────
-@info "Fitting spatial lag model..."
-y = access_vals
-# Design matrix: intercept + poverty + RUCC (rural-urban continuum code)
-X = hcat(
-ones(n),
 ```
-
-Float64.(coalesce.(nd_df.poverty_pct, median(skipmissing(nd_df.poverty_pct)))),
-
-Float64.(coalesce.(nd_df.RUCC,        5.0))  # Default to mid-rural
-
-)
-
-slm_result = slm(y, X, w)
 
 
 ### 29.1.4 Visualization Layer
 
 ```julia
-@info "SLM ρ = $(round(slm_result.rho; digits=3)), AIC = $(round(slm_result.AIC; digits=1))"
-return (nd_df=nd_df, w=w, moran_results=moran_results,
-lisa=lisa_result, slm=slm_result)
-end
 # === pipeline/04_visualize.jl ===
 using GeoMakie, CairoMakie, ColorSchemes
+
 function create_atlas(nd_df, analysis_results)
-proj = "+proj=laea +lat_0=47 +lon_0=-100 +ellps=WGS84"
-fig = Figure(resolution=(1800, 1200), fontsize=13,
-backgroundcolor=:white)
-# ── Title ─────────────────────────────────────────────────
-```
+    proj = "+proj=laea +lat_0=47 +lon_0=-100 +ellps=WGS84"
 
-Label(fig[0, 1:4],
+    fig = Figure(resolution=(1800, 1200), fontsize=13,
+                 backgroundcolor=:white)
 
-"North Dakota Primary Care Access Analysis",
+    # ── Title ─────────────────────────────────────────────────
+    Label(fig[0, 1:4],
+        "North Dakota Primary Care Access Analysis",
+        fontsize=22, font=:bold, tellwidth=false)
 
-fontsize=22, font=:bold, tellwidth=false)
+    # ── Panel 1: E2SFCA Access Scores ─────────────────────────
+    ax1 = GeoAxis(fig[1,1]; dest=proj, title="E2SFCA Access Score")
+    poly!(ax1, nd_df.geom;
+        color=coalesce.(nd_df.access_score, 0.0),
+        colormap=:YlGn, strokecolor=:white, strokewidth=0.4)
+    Colorbar(fig[1,2]; colormap=:YlGn, label="Access Score",
+        limits=extrema(coalesce.(nd_df.access_score, 0.0)), width=15)
 
-```julia
-# ── Panel 1: E2SFCA Access Scores ─────────────────────────
-ax1 = GeoAxis(fig[1,1]; dest=proj, title="E2SFCA Access Score")
-poly!(ax1, nd_df.geom;
-color=coalesce.(nd_df.access_score, 0.0),
-colormap=:YlGn, strokecolor=:white, strokewidth=0.4)
-```
+    # ── Panel 2: LISA Cluster Map ──────────────────────────────
+    ax2 = GeoAxis(fig[1,3]; dest=proj, title="LISA Clusters (Access)")
+    cluster_color = Dict(
+        :HH=>RGBf(0.78,0.18,0.18), :LL=>RGBf(0.21,0.45,0.74),
+        :HL=>RGBf(0.96,0.62,0.18), :LH=>RGBf(0.67,0.85,0.91),
+        :NS=>RGBf(0.92,0.92,0.92))
+    colors_lisa = [cluster_color[c] for c in nd_df.lisa_cluster]
+    poly!(ax2, nd_df.geom; color=colors_lisa, strokecolor=:white, strokewidth=0.4)
 
-Colorbar(fig[1,2]; colormap=:YlGn, label="Access Score",
+    # Custom LISA legend
+    entries = [PolyElement(color=v, strokecolor=:grey40) => k
+               for (k,v) in cluster_color if k != :NS]
+    push!(entries, PolyElement(color=cluster_color[:NS], strokecolor=:grey40) => :NS)
+    Legend(fig[1,4], first.(entries), string.(last.(entries));
+        title="Cluster", framevisible=true)
 
-limits=extrema(coalesce.(nd_df.access_score, 0.0)), width=15)
+    # ── Panel 3: Poverty Rate ──────────────────────────────────
+    ax3 = GeoAxis(fig[2,1]; dest=proj, title="Poverty Rate (%)")
+    pov_vals = Float64.(coalesce.(nd_df.poverty_pct, median(skipmissing(nd_df.poverty_pct))))
+    poly!(ax3, nd_df.geom;
+        color=pov_vals, colormap=:Oranges, strokecolor=:white, strokewidth=0.4)
+    Colorbar(fig[2,2]; colormap=:Oranges, label="Poverty %",
+        limits=extrema(pov_vals), width=15)
 
-```julia
-# ── Panel 2: LISA Cluster Map ──────────────────────────────
-ax2 = GeoAxis(fig[1,3]; dest=proj, title="LISA Clusters (Access)")
-cluster_color = Dict(
-:HH=>RGBf(0.78,0.18,0.18), :LL=>RGBf(0.21,0.45,0.74),
-:HL=>RGBf(0.96,0.62,0.18), :LH=>RGBf(0.67,0.85,0.91),
-:NS=>RGBf(0.92,0.92,0.92))
-colors_lisa = [cluster_color[c] for c in nd_df.lisa_cluster]
-poly!(ax2, nd_df.geom; color=colors_lisa, strokecolor=:white, strokewidth=0.4)
-# Custom LISA legend
-entries = [PolyElement(color=v, strokecolor=:grey40) => k
-for (k,v) in cluster_color if k != :NS]
-push!(entries, PolyElement(color=cluster_color[:NS], strokecolor=:grey40) => :NS)
-```
+    # ── Panel 4: Bivariate — Access vs Poverty ─────────────────
+    ax4 = GeoAxis(fig[2,3]; dest=proj, title="Bivariate: Access × Poverty")
+    # Use bivariate_map helper from Chapter 28
+    c1  = _quantile_classify(coalesce.(nd_df.access_score,0.0), 3)
+    c2  = _quantile_classify(pov_vals, 3)
+    pal = ["#e8e8e8" "#ace4e4" "#5ac8c8";
+           "#dfb0d6" "#a5add3" "#5698b9";
+           "#be64ac" "#8c62aa" "#3b4994"]
+    biv_colors = [parse(RGBf, pal[c1[i], c2[i]]) for i in 1:nrow(nd_df)]
+    poly!(ax4, nd_df.geom; color=biv_colors, strokecolor=:white, strokewidth=0.4)
 
-Legend(fig[1,4], first.(entries), string.(last.(entries));
-
-title="Cluster", framevisible=true)
-
-```julia
-# ── Panel 3: Poverty Rate ──────────────────────────────────
-ax3 = GeoAxis(fig[2,1]; dest=proj, title="Poverty Rate (%)")
-pov_vals = Float64.(coalesce.(nd_df.poverty_pct, median(skipmissing(nd_df.poverty_pct))))
-poly!(ax3, nd_df.geom;
-color=pov_vals, colormap=:Oranges, strokecolor=:white, strokewidth=0.4)
-```
-
-Colorbar(fig[2,2]; colormap=:Oranges, label="Poverty %",
-
-limits=extrema(pov_vals), width=15)
-
-```julia
-# ── Panel 4: Bivariate — Access vs Poverty ─────────────────
-ax4 = GeoAxis(fig[2,3]; dest=proj, title="Bivariate: Access × Poverty")
-# Use bivariate_map helper from Chapter 28
-c1  = _quantile_classify(coalesce.(nd_df.access_score,0.0), 3)
-c2  = _quantile_classify(pov_vals, 3)
-pal = ["#e8e8e8" "#ace4e4" "#5ac8c8";
-"#dfb0d6" "#a5add3" "#5698b9";
-"#be64ac" "#8c62aa" "#3b4994"]
-biv_colors = [parse(RGBf, pal[c1[i], c2[i]]) for i in 1:nrow(nd_df)]
-poly!(ax4, nd_df.geom; color=biv_colors, strokecolor=:white, strokewidth=0.4)
-save("nd_healthcare_atlas.pdf", fig; pt_per_unit=1)
-@info "Atlas saved: nd_healthcare_atlas.pdf"
+    save("nd_healthcare_atlas.pdf", fig; pt_per_unit=1)
+    @info "Atlas saved: nd_healthcare_atlas.pdf"
 end
+
 _quantile_classify(v,k) = let q=quantile(v, range(0,1;length=k+1))
-[min(searchsortedfirst(q,x), k) for x in v] end
+    [min(searchsortedfirst(q,x), k) for x in v] end
 ```

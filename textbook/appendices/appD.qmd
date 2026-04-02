@@ -1,15 +1,9 @@
 ---
-title: "Appendix D: Open Data Sources Master Directory"
+title: "Appendix D + Closing: Open Data Sources and Future Directions"
 subtitle: "Volume 2 — Gap Analysis and Open Population Data"
 ---
 
-
-# Appendix D: Open Data Sources Master Directory — Rural and Population Health
-
 This appendix provides a comprehensive reference directory of open-access data sources for rural and population health geographic analysis, including URL, license, geographic coverage, primary variables, and Julia access method for each source.
-
-
-# Closing: The Future of Julia for Healthcare Geographic Analysis
 
 Julia occupies a distinctive and valuable position in the geospatial computing landscape. It offers near-C performance for computational geospatial operations, a growing ecosystem of well-designed packages in JuliaGeo and JuliaEarth, native support for the mathematical operations most important in spatial statistics, and a package ecosystem that makes implementing new methods from scratch both feasible and rewarding.
 

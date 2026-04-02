@@ -40,7 +40,9 @@ Julia's LinearAlgebra and SparseArrays standard libraries provide all the mathem
 ```julia
 # === PROTOTYPE: Maximum Likelihood Spatial Lag Model in Julia ===
 # This illustrates what a full SpatialReg.jl package would need to implement
+
 using LinearAlgebra, SparseArrays, Optim, Statistics
+
 """
     spatial_lag_ml(y, X, W)
 Maximum likelihood estimation of the spatial lag model (SAR).
@@ -49,114 +51,80 @@ y = ρWy + Xβ + ε,  ε ~ N(0, σ²I)
 Returns NamedTuple: (rho, beta, sigma2, log_lik, AIC, BIC)
 """
 function spatial_lag_ml(y::Vector{Float64}, X::Matrix{Float64},
-```
+                          W::SparseMatrixCSC{Float64})
+    n, k = size(X)
+    @assert length(y) == n "y and X must have same number of rows"
 
-W::SparseMatrixCSC{Float64})
+    # Pre-compute eigenvalues of W for log-det computation (Ord 1975)
+    # Only valid for symmetric W; use sparse eigensolver for large n
+    eigs_W = eigvals(Matrix(W))  # For production, use Arpack.jl
 
-n, k = size(X)
+    # Log-likelihood function for rho
+    function neg_log_lik(ρ)
+        S = I - ρ .* W  # Spatial filter: (I - ρW)
+        Sy = S * y
+        # OLS of Sy on X gives beta-hat conditional on rho
+        beta_hat = X \ Sy
+        e = Sy - X * beta_hat
+        σ2 = dot(e, e) / n
+        # Log-determinant via pre-computed eigenvalues
+        log_det_S = sum(log.(abs.(1.0 .- ρ .* eigs_W)))
+        ll = log_det_S - (n/2.0)*log(σ2) - n/2.0
+        return -ll  # return negative for minimization
+    end
 
-```julia
-@assert length(y) == n "y and X must have same number of rows"
-# Pre-compute eigenvalues of W for log-det computation (Ord 1975)
-# Only valid for symmetric W; use sparse eigensolver for large n
-eigs_W = eigvals(Matrix(W))  # For production, use Arpack.jl
-# Log-likelihood function for rho
-function neg_log_lik(ρ)
-```
+    # Optimize over rho ∈ (1/λ_min, 1/λ_max)
+    λ_min, λ_max = minimum(real.(eigs_W)), maximum(real.(eigs_W))
+    ρ_bounds = (1.01/λ_max, 0.99/λ_min)
+    result = optimize(neg_log_lik, ρ_bounds..., Brent())
+    ρ_hat = Optim.minimizer(result)
 
-S = I - ρ .* W  # Spatial filter: (I - ρW)
+    # Final parameter estimates at optimal rho
+    S_hat = I - ρ_hat .* W
+    Sy = S_hat * y
+    β_hat = X \ Sy
+    e = Sy - X * β_hat
+    σ2_hat = dot(e,e) / n
+    ll_hat = -Optim.minimum(result)
 
-Sy = S * y
+    # Information criteria
+    AIC = -2ll_hat + 2(k + 2)   # k betas + rho + sigma2
+    BIC = -2ll_hat + log(n)*(k + 2)
 
-```julia
-# OLS of Sy on X gives beta-hat conditional on rho
-beta_hat = X \ Sy
-e = Sy - X * beta_hat
-σ2 = dot(e, e) / n
-# Log-determinant via pre-computed eigenvalues
-log_det_S = sum(log.(abs.(1.0 .- ρ .* eigs_W)))
-ll = log_det_S - (n/2.0)*log(σ2) - n/2.0
-return -ll  # return negative for minimization
+    return (rho=ρ_hat, beta=β_hat, sigma2=σ2_hat,
+            log_lik=ll_hat, AIC=AIC, BIC=BIC)
 end
-# Optimize over rho ∈ (1/λ_min, 1/λ_max)
-λ_min, λ_max = minimum(real.(eigs_W)), maximum(real.(eigs_W))
-ρ_bounds = (1.01/λ_max, 0.99/λ_min)
-result = optimize(neg_log_lik, ρ_bounds..., Brent())
-ρ_hat = Optim.minimizer(result)
-# Final parameter estimates at optimal rho
-```
 
-S_hat = I - ρ_hat .* W
-
-Sy = S_hat * y
-
-β_hat = X \ Sy
-
-e = Sy - X * β_hat
-
-σ2_hat = dot(e,e) / n
-
-ll_hat = -Optim.minimum(result)
-
-```julia
-# Information criteria
-```
-
-AIC = -2ll_hat + 2(k + 2)   # k betas + rho + sigma2
-
-BIC = -2ll_hat + log(n)*(k + 2)
-
-return (rho=ρ_hat, beta=β_hat, sigma2=σ2_hat,
-
-log_lik=ll_hat, AIC=AIC, BIC=BIC)
-
-```julia
-end
 # === Lagrange Multiplier Tests for Model Selection ===
 # (analogous to spdep::lm.LMtests in R)
 function lm_spatial_tests(ols_residuals::Vector{Float64},
+                             X::Matrix{Float64},
+                             W::SparseMatrixCSC{Float64})
+    n = length(ols_residuals)
+    e = ols_residuals
+    σ2 = dot(e,e) / n
+    We = W * e
+
+    # LM-lag statistic
+    T_11 = tr(Matrix(W*W) + Matrix(W'*W))
+    J_11 = T_11 / σ2
+    LM_lag = (dot(e, We) / σ2)^2 / J_11
+
+    # LM-error statistic
+    LM_err = (dot(e, We))^2 / (σ2^2 * tr(Matrix(W'*W + W*W)))
+
+    # Chi-squared(1) p-values
+    using Distributions
+    χ2 = Chisq(1)
+    p_lag = 1 - cdf(χ2, LM_lag)
+    p_err = 1 - cdf(χ2, LM_err)
+
+    return (LM_lag=LM_lag, p_lag=p_lag, LM_err=LM_err, p_err=p_err)
+end
 ```
-
-X::Matrix{Float64},
-
-W::SparseMatrixCSC{Float64})
-
-n = length(ols_residuals)
-
-e = ols_residuals
-
-σ2 = dot(e,e) / n
-
-We = W * e
-
-```julia
-# LM-lag statistic
-```
-
-T_11 = tr(Matrix(W*W) + Matrix(W'*W))
-
-J_11 = T_11 / σ2
-
-LM_lag = (dot(e, We) / σ2)^2 / J_11
-
-```julia
-# LM-error statistic
-```
-
-LM_err = (dot(e, We))^2 / (σ2^2 * tr(Matrix(W'*W + W*W)))
 
 
 ### 11.2.3 Point Pattern Analysis: The spatstat Gap
-
-```julia
-# Chi-squared(1) p-values
-using Distributions
-χ2 = Chisq(1)
-p_lag = 1 - cdf(χ2, LM_lag)
-p_err = 1 - cdf(χ2, LM_err)
-return (LM_lag=LM_lag, p_lag=p_lag, LM_err=LM_err, p_err=p_err)
-end
-```
 
 R's spatstat package is one of the most comprehensive statistical computing packages in existence — it contains over 2,000 functions for analysis of two-dimensional point patterns, including intensity estimation, complete spatial randomness tests, the K function, L function, pair correlation function, mark correlation function, Cox processes, Neyman-Scott processes, and a vast array of model-fitting routines. For spatial epidemiology applications such as identifying disease clusters, testing whether cases cluster near environmental hazards, or analyzing the spatial distribution of healthcare facilities, spatstat is essentially irreplaceable.
 
@@ -183,9 +151,10 @@ For production GIS pipelines, this creates fragility at every serialization boun
 
 ### 11.3.2 Vector Overlay Operations
 
+```julia
 Spatial overlay operations — intersection, union, difference, symmetric difference — are fundamental to healthcare GIS. Computing the overlap between HPSA-designated areas and rural census tracts, intersecting hospital catchment areas with county boundaries, or unioning county polygons to create state-level aggregations are all overlay operations. In Python, these are handled by GeoPandas via its overlay() function. In R, they are handled by sf::st_intersection(), st_union(), and related functions. Both leverage the GEOS C++ library for computational geometry.
-
 Julia's ArchGDAL.jl provides access to GDAL's OGR layer operations, which can perform overlay operations, but the interface is low-level and requires explicit management of OGR layer objects. GeoDataFrames.jl provides higher-level overlay functions built on ArchGDAL, but its coverage is incomplete: st_intersection and st_union are implemented, but more complex overlay combinations (st_difference, topological snap operations) are missing or undocumented. GeometryOps.jl, a newer JuliaGeo package, is filling this gap but was not mature as of 2025.
+```
 
 
 ### 11.3.3 Spatial Indexing at Scale
@@ -223,13 +192,13 @@ Rate limits are generous for research use. See implementation below.
 ```julia
 # === U.S. Census Bureau Geocoder in Julia (no external package needed) ===
 using HTTP, CSV, DataFrames, IOBuffer
+
 """
-census_geocode_batch(addresses; vintage="Current")
-```
+    census_geocode_batch(addresses; vintage="Current")
 
 Geocode U.S. addresses using the Census Bureau Geocoder batch API.
-
 addresses: DataFrame with columns: id, street, city, state, zip
+```
 
 Returns DataFrame with columns from input + lat, lon, match_type,
 
@@ -241,83 +210,75 @@ Max batch size: 1,000 addresses. Calls are free, no API key required.
 
 ```julia
 function census_geocode_batch(addresses::DataFrame;
-vintage::String = "Current")
-n = nrow(addresses)
-n > 1000 && error("Batch size limit is 1,000 addresses.")
-# Format as CSV payload required by Census API
-csv_buf = IOBuffer()
+                               vintage::String = "Current")
+    n = nrow(addresses)
+    n > 1000 && error("Batch size limit is 1,000 addresses.")
+
+    # Format as CSV payload required by Census API
+    csv_buf = IOBuffer()
+    CSV.write(csv_buf, select(addresses, :id, :street, :city, :state, :zip))
+    csv_bytes = take!(csv_buf)
+
+    url = "https://geocoding.geo.census.gov/geocoder/geographies/addressbatch"
+    resp = HTTP.post(url,
+        [],  # no extra headers
+        HTTP.Form([
+            "addressFile" => HTTP.Multipart("addresses.csv", IOBuffer(csv_bytes),
+                                              "text/csv"),
+            "benchmark" => "Public_AR_Current",
+            "vintage"   => vintage
+        ])
+    )
+
+    # Parse response CSV
+    result_raw = String(resp.body)
+    io = IOBuffer(result_raw)
+    cols = [:id, :input_address, :match, :match_type, :matched_address,
+            :lon_lat, :tiger_line_id, :side, :state_fips, :county_fips,
+            :tract, :block]
+    result = CSV.read(io, DataFrame;
+        header = false, silencewarnings = true,
+        types = Dict(1=>String))
+    rename!(result, cols[1:ncol(result)])
+
+    # Parse lon/lat from combined column
+    result.lon = map(r -> begin
+        !ismissing(r.lon_lat) && !isempty(r.lon_lat) ?
+            parse(Float64, split(r.lon_lat, ",")[1]) : missing
+    end, eachrow(result))
+    result.lat = map(r -> begin
+        !ismissing(r.lon_lat) && !isempty(r.lon_lat) ?
+            parse(Float64, split(r.lon_lat, ",")[2]) : missing
+    end, eachrow(result))
+
+    # Build census tract FIPS
+    result.tract_fips = map(r ->
+        ismissing(r.state_fips) ? missing :
+        rpad(r.state_fips,2,"0") * rpad(r.county_fips,3,"0") * lpad(r.tract,6,"0"),
+        eachrow(result))
+
+    return result
+end
+
+# === Chunked batch geocoding for large address lists ===
+function geocode_all(addresses::DataFrame; batch_size=500, sleep_sec=1.0)
+    n = nrow(addresses)
+    batches = [addresses[i:min(i+batch_size-1,n),:] for i in 1:batch_size:n]
+    results = DataFrame[]
+    for (k, batch) in enumerate(batches)
+        @info "Geocoding batch $(k)/$(length(batches)) ($(nrow(batch)) addresses)"
+        push!(results, census_geocode_batch(batch))
+        k < length(batches) && sleep(sleep_sec)  # rate limit respect
+    end
+    vcat(results...)
+end
 ```
-
-CSV.write(csv_buf, select(addresses, :id, :street, :city, :state, :zip))
-
-csv_bytes = take!(csv_buf)
-
-url = "https://geocoding.geo.census.gov/geocoder/geographies/addressbatch"
-
-resp = HTTP.post(url,
-
-[],  # no extra headers
-
-HTTP.Form([
-
-"addressFile" => HTTP.Multipart("addresses.csv", IOBuffer(csv_bytes),
-
-"text/csv"),
-
-"benchmark" => "Public_AR_Current",
-
-"vintage"   => vintage
-
-])
-
-)
 
 
 ## 11.5 Routing and Network Analysis Gaps
 
 
 ### 11.5.1 The Absence of OSMnx in Julia
-
-```julia
-# Parse response CSV
-result_raw = String(resp.body)
-io = IOBuffer(result_raw)
-cols = [:id, :input_address, :match, :match_type, :matched_address,
-:lon_lat, :tiger_line_id, :side, :state_fips, :county_fips,
-:tract, :block]
-result = CSV.read(io, DataFrame;
-header = false, silencewarnings = true,
-types = Dict(1=>String))
-rename!(result, cols[1:ncol(result)])
-# Parse lon/lat from combined column
-result.lon = map(r -> begin
-!ismissing(r.lon_lat) && !isempty(r.lon_lat) ?
-parse(Float64, split(r.lon_lat, ",")[1]) : missing
-end, eachrow(result))
-result.lat = map(r -> begin
-!ismissing(r.lon_lat) && !isempty(r.lon_lat) ?
-parse(Float64, split(r.lon_lat, ",")[2]) : missing
-end, eachrow(result))
-# Build census tract FIPS
-result.tract_fips = map(r ->
-ismissing(r.state_fips) ? missing :
-rpad(r.state_fips,2,"0") * rpad(r.county_fips,3,"0") * lpad(r.tract,6,"0"),
-eachrow(result))
-return result
-end
-# === Chunked batch geocoding for large address lists ===
-function geocode_all(addresses::DataFrame; batch_size=500, sleep_sec=1.0)
-n = nrow(addresses)
-batches = [addresses[i:min(i+batch_size-1,n),:] for i in 1:batch_size:n]
-results = DataFrame[]
-for (k, batch) in enumerate(batches)
-@info "Geocoding batch $(k)/$(length(batches)) ($(nrow(batch)) addresses)"
-push!(results, census_geocode_batch(batch))
-k < length(batches) && sleep(sleep_sec)  # rate limit respect
-end
-vcat(results...)
-end
-```
 
 Python's OSMnx package, developed by Geoff Boeing at USC, is the definitive tool for working with OpenStreetMap street network data in Python. OSMnx provides a complete workflow from data acquisition (downloading street network data for any geographic area from the Overpass API) through network analysis (computing routing statistics, betweenness centrality, street orientation distributions) to visualization (plotting street networks with customizable styling). OSMnx has been used to construct a global database of street networks with indicators for every urban area in the world and is the standard tool for network-based healthcare accessibility analysis.
 
@@ -342,14 +303,15 @@ single O-D pairs and fast table queries for batch O-D matrices.
 ```julia
 # === Self-hosted OSRM integration for rural healthcare travel time analysis ===
 # Assumes OSRM backend running locally: docker run -t -i -p 5000:5000 ...
+
 using HTTP, JSON, DataFrames
+
 """
-osrm_table(origins, destinations; host="http://localhost:5000")
-```
+    osrm_table(origins, destinations; host="http://localhost:5000")
 
 Compute all-pairs travel time matrix via self-hosted OSRM.
-
 origins/destinations: Vector of (lat, lon) tuples
+```
 
 Returns Matrix{Float64} of drive times in minutes (n_orig × n_dest).
 
@@ -359,28 +321,32 @@ Self-hosting eliminates rate limits for production batch analysis.
 
 ```julia
 function osrm_table(origins::Vector{NTuple{2,Float64}},
-destinations::Vector{NTuple{2,Float64}};
-host::String = "http://localhost:5000")
-all_locs = vcat(origins, destinations)
-coord_str = join("$(lon),$(lat)" for (lat, lon) in all_locs, ";")
-src_str   = join(0:(length(origins)-1), ";")
-dst_str   = join(length(origins):(length(all_locs)-1), ";")
-url = "$(host)/table/v1/driving/$(coord_str)" *
-"?sources=$(src_str)&destinations=$(dst_str)&annotations=duration"
-resp = HTTP.get(url; readtimeout=120)
-data = JSON.parse(String(resp.body))
-data["code"] == "Ok" || error("OSRM error: $(data["code"])")
-n_o, n_d = length(origins), length(destinations)
-mat = Matrix{Float64}(undef, n_o, n_d)
-for i in 1:n_o, j in 1:n_d
-t = data["durations"][i][j]
-mat[i,j] = isnothing(t) ? Inf : t / 60.0  # seconds → minutes
+                     destinations::Vector{NTuple{2,Float64}};
+                     host::String = "http://localhost:5000")
+    all_locs = vcat(origins, destinations)
+    coord_str = join("$(lon),$(lat)" for (lat, lon) in all_locs, ";")
+    src_str   = join(0:(length(origins)-1), ";")
+    dst_str   = join(length(origins):(length(all_locs)-1), ";")
+
+    url = "$(host)/table/v1/driving/$(coord_str)" *
+          "?sources=$(src_str)&destinations=$(dst_str)&annotations=duration"
+
+    resp = HTTP.get(url; readtimeout=120)
+    data = JSON.parse(String(resp.body))
+    data["code"] == "Ok" || error("OSRM error: $(data["code"])")
+
+    n_o, n_d = length(origins), length(destinations)
+    mat = Matrix{Float64}(undef, n_o, n_d)
+    for i in 1:n_o, j in 1:n_d
+        t = data["durations"][i][j]
+        mat[i,j] = isnothing(t) ? Inf : t / 60.0  # seconds → minutes
+    end
+    mat
 end
-mat
-end
+
 # === Overpass API downloader (bridging the OSMnx gap) ===
 """
-download_osm_network(bbox; transport="drive")
+    download_osm_network(bbox; transport="drive")
 ```
 
 Download OSM road network for a bounding box from Overpass API.
@@ -393,38 +359,41 @@ Returns raw OSM XML string; save as .osm for OpenStreetMapX.jl parsing.
 
 """
 
+```julia
+function download_osm_network(bbox::NTuple{4,Float64};
+                               transport::String = "drive")
+    s, w, n, e = bbox
+    filter_str = if transport == "drive"
+        "[\"highway\"~\"motorway|trunk|primary|secondary|tertiary|residential\"]"
+    elseif transport == "walk"
+        "[\"highway\"][\"highway\"!~\"motorway|trunk\"]"
+    else  # all
+        "[\"highway\"]"
+    end
+
+    query = """
+    [out:xml][timeout:300];
+    (
+      way$(filter_str)($(s),$(w),$(n),$(e));
+      >;
+    );
+    out body;
+    """
+
+    resp = HTTP.post("https://overpass-api.de/api/interpreter",
+        ["Content-Type" => "application/x-www-form-urlencoded"],
+        "data=" * HTTP.URIs.escapeuri(query);
+        readtimeout=300)
+
+    return String(resp.body)
+end
+```
+
 
 ## 11.6 Machine Learning Integration Gaps for Spatial Data
 
 
 ### 11.6.1 Spatial Cross-Validation
-
-```julia
-function download_osm_network(bbox::NTuple{4,Float64};
-transport::String = "drive")
-s, w, n, e = bbox
-filter_str = if transport == "drive"
-"[\"highway\"~\"motorway|trunk|primary|secondary|tertiary|residential\"]"
-elseif transport == "walk"
-"[\"highway\"][\"highway\"!~\"motorway|trunk\"]"
-else  # all
-"[\"highway\"]"
-end
-query = """
-[out:xml][timeout:300];
-(
-way$(filter_str)($(s),$(w),$(n),$(e));
->;
-);
-out body;
-"""
-resp = HTTP.post("https://overpass-api.de/api/interpreter",
-["Content-Type" => "application/x-www-form-urlencoded"],
-"data=" * HTTP.URIs.escapeuri(query);
-readtimeout=300)
-return String(resp.body)
-end
-```
 
 When applying machine learning to spatial prediction problems — predicting health outcomes from spatial features, predicting provider supply from demographic covariates, or predicting access deserts from network features — standard k-fold cross-validation is inappropriate. Because spatially autocorrelated data violates the independence assumption of standard cross-validation, standard CV produces optimistically biased performance estimates. Spatial cross-validation, which partitions data into spatially contiguous blocks and uses these blocks as CV folds, is the methodologically correct approach.
 

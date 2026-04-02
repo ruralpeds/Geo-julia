@@ -15,12 +15,14 @@ GPU acceleration in Julia via CUDA.jl (NVIDIA) and Metal.jl (Apple Silicon) can 
 # === GPU-accelerated haversine distance matrix with CUDA.jl ===
 # Install: ] add CUDA
 # Requires NVIDIA GPU with CUDA support
+
 using CUDA, LinearAlgebra
+
 """
-haversine_matrix_gpu(lats, lons)
-```
+    haversine_matrix_gpu(lats, lons)
 
 Compute all-pairs haversine distance matrix on GPU.
+```
 
 For n > 5000 points, GPU is 20-100x faster than CPU.
 
@@ -30,142 +32,109 @@ Returns Matrix{Float32} of pairwise distances in km.
 
 ```julia
 function haversine_matrix_gpu(
-lats::Vector{Float64},
-lons::Vector{Float64}
-)::Matrix{Float32}
-```
+        lats::Vector{Float64},
+        lons::Vector{Float64}
+    )::Matrix{Float32}
 
-CUDA.functional() || error("CUDA GPU not available")
+    CUDA.functional() || error("CUDA GPU not available")
+    n = length(lats)
 
-n = length(lats)
+    # Transfer coordinates to GPU memory
+    d_lats = CuArray(Float32.(deg2rad.(lats)))
+    d_lons = CuArray(Float32.(deg2rad.(lons)))
 
-```julia
-# Transfer coordinates to GPU memory
-d_lats = CuArray(Float32.(deg2rad.(lats)))
-d_lons = CuArray(Float32.(deg2rad.(lons)))
-# GPU kernel: compute haversine for each (i,j) pair in parallel
-function haversine_kernel!(D, lats, lons, n)
-i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
-j = (blockIdx().y - 1) * blockDim().y + threadIdx().y
-(i > n || j > n) && return nothing
-dlat = lats[i] - lats[j]
-dlon = lons[i] - lons[j]
-a = sin(dlat/2f0)^2 + cos(lats[j]) * cos(lats[i]) * sin(dlon/2f0)^2
-```
+    # GPU kernel: compute haversine for each (i,j) pair in parallel
+    function haversine_kernel!(D, lats, lons, n)
+        i = (blockIdx().x - 1) * blockDim().x + threadIdx().x
+        j = (blockIdx().y - 1) * blockDim().y + threadIdx().y
+        (i > n || j > n) && return nothing
 
-D[i,j] = 2f0 * 6371f0 * asin(sqrt(a))
+        dlat = lats[i] - lats[j]
+        dlon = lons[i] - lons[j]
+        a = sin(dlat/2f0)^2 + cos(lats[j]) * cos(lats[i]) * sin(dlon/2f0)^2
+        D[i,j] = 2f0 * 6371f0 * asin(sqrt(a))
+        return nothing
+    end
 
-return nothing
+    d_D  = CUDA.zeros(Float32, n, n)
+    threads = (16, 16)
+    blocks  = (cld(n, 16), cld(n, 16))
+    @cuda threads=threads blocks=blocks haversine_kernel!(d_D, d_lats, d_lons, n)
 
-```julia
+    # Transfer result back to CPU
+    return Array(d_D)
 end
-d_D  = CUDA.zeros(Float32, n, n)
-threads = (16, 16)
-blocks  = (cld(n, 16), cld(n, 16))
-@cuda threads=threads blocks=blocks haversine_kernel!(d_D, d_lats, d_lons, n)
-# Transfer result back to CPU
-return Array(d_D)
-end
+
 # === Apple Silicon Metal backend (M1/M2/M3) ===
 # Install: ] add Metal
 # Available on macOS with M-series chips
+
 using Metal
+
 function haversine_matrix_metal(
-lats::Vector{Float64},
-lons::Vector{Float64}
-)::Matrix{Float32}
-```
+        lats::Vector{Float64},
+        lons::Vector{Float64}
+    )::Matrix{Float32}
 
-Metal.functional() || error("Metal GPU not available (requires Apple Silicon)")
+    Metal.functional() || error("Metal GPU not available (requires Apple Silicon)")
+    n = length(lats)
 
-n = length(lats)
+    m_lats = MtlArray(Float32.(deg2rad.(lats)))
+    m_lons = MtlArray(Float32.(deg2rad.(lons)))
+    m_D    = MtlArray(zeros(Float32, n, n))
 
-m_lats = MtlArray(Float32.(deg2rad.(lats)))
+    function kernel!(D, lats, lons)
+        i = thread_position_in_grid_1d()
+        i > length(lats) && return
+        for j in 1:length(lats)
+            dlat = lats[i] - lats[j]
+            dlon = lons[i] - lons[j]
+            a = sin(dlat/2f0)^2 + cos(lats[j])*cos(lats[i])*sin(dlon/2f0)^2
+            D[i,j] = 2f0 * 6371f0 * asin(sqrt(a))
+        end
+        return
+    end
 
-m_lons = MtlArray(Float32.(deg2rad.(lons)))
-
-m_D    = MtlArray(zeros(Float32, n, n))
-
-```julia
-function kernel!(D, lats, lons)
-i = thread_position_in_grid_1d()
-i > length(lats) && return
-for j in 1:length(lats)
-dlat = lats[i] - lats[j]
-dlon = lons[i] - lons[j]
-a = sin(dlat/2f0)^2 + cos(lats[j])*cos(lats[i])*sin(dlon/2f0)^2
-```
-
-D[i,j] = 2f0 * 6371f0 * asin(sqrt(a))
-
-```julia
+    @metal threads=n kernel!(m_D, m_lats, m_lons)
+    return Array(m_D)
 end
-return
-end
-@metal threads=n kernel!(m_D, m_lats, m_lons)
-return Array(m_D)
-end
+
 # === GPU-accelerated permutation test for Moran's I ===
 # 999 permutations of 73,000 census tracts: GPU = 2s vs CPU = 180s
 function moran_permutation_gpu(
-x::Vector{Float64},
-```
+        x::Vector{Float64},
+        W::SparseMatrixCSC{Float64};
+        permutations::Int = 999
+    )
+    CUDA.functional() || return moran_permutation_cpu(x, W; permutations)
 
-W::SparseMatrixCSC{Float64};
+    n   = length(x)
+    x̄  = mean(x)
+    z   = Float32.(x .- x̄)
+    S0  = Float32(sum(W))
+    denom = Float32(dot(z, z))
 
-permutations::Int = 999
+    # Transfer to GPU
+    d_z = CuArray(z)
+    d_W = CUDA.CUSPARSE.CuSparseMatrixCSC(Float32.(W))
 
-)
+    # Observed statistic on GPU
+    Wz_obs = d_W * d_z
+    I_obs  = Float64((n/S0) * (d_z ⋅ Wz_obs) / denom)
 
-CUDA.functional() || return moran_permutation_cpu(x, W; permutations)
+    # Permutation statistics: embarrassingly parallel
+    # Stack all permutations as columns of a matrix, multiply at once
+    Z_perm = similar(d_z, n, permutations)
+    for k in 1:permutations
+        col = randperm(CUDA.default_rng(), n)  # GPU-side permutation
+        Z_perm[:,k] .= d_z[col]
+    end
 
-n   = length(x)
+    # All permutation spatial lags in one batched SpMM
+    WZ_perm = d_W * Z_perm  # Sparse × Dense matrix multiply on GPU
+    I_perm  = Array((n/S0) .* (sum(Z_perm .* WZ_perm; dims=1)) ./ denom)
 
-x̄  = mean(x)
-
-z   = Float32.(x .- x̄)
-
-S0  = Float32(sum(W))
-
-denom = Float32(dot(z, z))
-
-```julia
-# Transfer to GPU
-d_z = CuArray(z)
-d_W = CUDA.CUSPARSE.CuSparseMatrixCSC(Float32.(W))
-# Observed statistic on GPU
-```
-
-Wz_obs = d_W * d_z
-
-I_obs  = Float64((n/S0) * (d_z ⋅ Wz_obs) / denom)
-
-```julia
-# Permutation statistics: embarrassingly parallel
-# Stack all permutations as columns of a matrix, multiply at once
-```
-
-Z_perm = similar(d_z, n, permutations)
-
-for k in 1:permutations
-
-col = randperm(CUDA.default_rng(), n)  # GPU-side permutation
-
-Z_perm[:,k] .= d_z[col]
-
-```julia
-end
-# All permutation spatial lags in one batched SpMM
-```
-
-WZ_perm = d_W * Z_perm  # Sparse × Dense matrix multiply on GPU
-
-I_perm  = Array((n/S0) .* (sum(Z_perm .* WZ_perm; dims=1)) ./ denom)
-
-p_value = mean(abs.(I_perm) .>= abs(I_obs))
-
-return (I=I_obs, p_value=p_value)
-
-```julia
+    p_value = mean(abs.(I_perm) .>= abs(I_obs))
+    return (I=I_obs, p_value=p_value)
 end
 ```

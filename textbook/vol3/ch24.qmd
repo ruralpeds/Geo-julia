@@ -10,126 +10,118 @@ For spatial analysis at national scale — the 73,000+ U.S. census tracts — pe
 
 ```julia
 # === Performance profiling workflow ===
+
 # 1. Profile with @profile (flame graph) + ProfileView.jl
 using Profile, ProfileView
+
 # Warm up the function first (JIT compilation)
 moran(rand(100), test_weights)
+
 # Clear profile data and record
-```
-
 Profile.clear()
-
-```julia
 @profile for _ in 1:100; moran(rand(3000), us_county_weights); end
-```
-
 ProfileView.view()   # Opens interactive flame graph
 
-
-### 24.1.1 Threading Spatial Analysis with Threads.@threads
-
-```julia
 # 2. Memory allocation profiling
 @time moran(rand(3000), us_county_weights)  # Shows time + allocations
 @allocated moran(rand(3000), us_county_weights)  # Bytes allocated
+
 # 3. Find the worst offenders
 # In flame graph: look for wide bars = CPU time
 # @allocated > 0 in hot loops = heap allocation = slow
+
 # ── Key optimization: in-place operations avoid heap allocation ──
+
 # ❌ SLOW: Creates new array on every call (heap allocation)
 function moran_slow(x, W)
-z   = x .- mean(x)          # Allocates new array
-lag = W * z                  # Allocates new array
-return dot(z, lag) / dot(z, z) * length(x) / sum(W)
+    z   = x .- mean(x)          # Allocates new array
+    lag = W * z                  # Allocates new array
+    return dot(z, lag) / dot(z, z) * length(x) / sum(W)
 end
+
 # ✅ FAST: Pre-allocated workspace, zero heap allocation in hot path
 function moran_fast!(workspace::Vector{Float64}, lag::Vector{Float64},
-x::Vector{Float64}, W::SparseMatrixCSC{Float64})
-n  = length(x)
-x̄  = mean(x)
-# In-place: workspace .= x .- x̄  (no allocation)
-workspace .= x .- x̄
-# In-place sparse matrix-vector product: lag = W*z
-mul!(lag, W, workspace)      # SparseArrays mul! is zero-allocation
-numerator   = dot(workspace, lag)
-denominator = dot(workspace, workspace)
-(n / sum(W)) * (numerator / denominator)
+                      x::Vector{Float64}, W::SparseMatrixCSC{Float64})
+    n  = length(x)
+    x̄  = mean(x)
+    # In-place: workspace .= x .- x̄  (no allocation)
+    workspace .= x .- x̄
+    # In-place sparse matrix-vector product: lag = W*z
+    mul!(lag, W, workspace)      # SparseArrays mul! is zero-allocation
+    numerator   = dot(workspace, lag)
+    denominator = dot(workspace, workspace)
+    (n / sum(W)) * (numerator / denominator)
 end
+
 # Pre-allocate workspace once, reuse for all permutations
 workspace = Vector{Float64}(undef, n)
 lag_buf   = Vector{Float64}(undef, n)
 # Called 999 times without a single heap allocation:
 for _ in 1:999
-copyto!(workspace, x)
-shuffle!(workspace)
-moran_fast!(workspace, lag_buf, workspace, W)
+    copyto!(workspace, x)
+    shuffle!(workspace)
+    moran_fast!(workspace, lag_buf, workspace, W)
 end
+```
+
+
+### 24.1.1 Threading Spatial Analysis with Threads.@threads
+
+```julia
 # === Multi-threaded LISA computation ===
 # LISA is embarrassingly parallel: each location is independent
 # Run Julia with: julia -t auto (uses all CPU cores)
+
 function lisa_threaded(
-x::Vector{Float64},
-w::SpatialWeights;
-permutations::Int = 999,
-alpha::Float64 = 0.05
-)
-n  = nobs(w)
-x̄  = mean(x)
-z  = x .- x̄
-m2 = dot(z, z) / n
-m2 ≈ 0 && return _constant_lisa(n, alpha)
-lag_z   = w.W * z
-```
+        x::Vector{Float64},
+        w::SpatialWeights;
+        permutations::Int = 999,
+        alpha::Float64 = 0.05
+    )
 
-I_local = (z ./ m2) .* lag_z
+    n  = nobs(w)
+    x̄  = mean(x)
+    z  = x .- x̄
+    m2 = dot(z, z) / n
+    m2 ≈ 0 && return _constant_lisa(n, alpha)
 
-p_values = Vector{Float64}(undef, n)
+    lag_z   = w.W * z
+    I_local = (z ./ m2) .* lag_z
+    p_values = Vector{Float64}(undef, n)
 
-```julia
-# Each thread gets its own RNG to avoid race conditions
-rngs = [MersenneTwister(i) for i in 1:Threads.nthreads()]
-# Parallel LISA: each location permuted independently
-```
+    # Each thread gets its own RNG to avoid race conditions
+    rngs = [MersenneTwister(i) for i in 1:Threads.nthreads()]
 
-Threads.@threads for i in 1:n
+    # Parallel LISA: each location permuted independently
+    Threads.@threads for i in 1:n
+        rng    = rngs[Threads.threadid()]
+        zi     = z[i]
+        nbrs   = neighbors(w, i)
+        nwts   = neighbor_weights(w, i)
+        n_nbrs = length(nbrs)
 
-rng    = rngs[Threads.threadid()]
+        I_perm = Vector{Float64}(undef, permutations)
+        z_other = deleteat!(copy(z), i)   # z without location i
 
-zi     = z[i]
+        for k in 1:permutations
+            shuffle!(rng, z_other)
+            # Map original neighbor indices to z_other indices
+            lag_i = sum(nwts[j] * z_other[nbrs[j] > i ? nbrs[j]-1 : nbrs[j]]
+                        for j in 1:n_nbrs)
+            I_perm[k] = (zi / m2) * lag_i
+        end
+        p_values[i] = mean(abs.(I_perm) .>= abs(I_local[i]))
+    end
 
-nbrs   = neighbors(w, i)
+    # Classify clusters
+    lag_x   = w.W * x
+    cluster = _classify_clusters(x, lag_x, x̄, p_values, alpha)
 
-nwts   = neighbor_weights(w, i)
-
-n_nbrs = length(nbrs)
-
-I_perm = Vector{Float64}(undef, permutations)
-
-z_other = deleteat!(copy(z), i)   # z without location i
-
-for k in 1:permutations
-
-shuffle!(rng, z_other)
-
-```julia
-# Map original neighbor indices to z_other indices
-lag_i = sum(nwts[j] * z_other[nbrs[j] > i ? nbrs[j]-1 : nbrs[j]]
-for j in 1:n_nbrs)
-```
-
-I_perm[k] = (zi / m2) * lag_i
-
-```julia
+    return LISAResult(I_local=I_local, p_values=p_values,
+                      cluster=cluster, z_scores=I_local./std(I_local),
+                      significance=alpha)
 end
-p_values[i] = mean(abs.(I_perm) .>= abs(I_local[i]))
-end
-# Classify clusters
-lag_x   = w.W * x
-cluster = _classify_clusters(x, lag_x, x̄, p_values, alpha)
-return LISAResult(I_local=I_local, p_values=p_values,
-cluster=cluster, z_scores=I_local./std(I_local),
-significance=alpha)
-end
+
 # Benchmark: threading speedup on n=3000, 999 permutations
 # 1 thread:  ~45 seconds
 # 8 threads: ~7 seconds (6x speedup; near-linear scaling)

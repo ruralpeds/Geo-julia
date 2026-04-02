@@ -17,112 +17,108 @@ The Project.toml is the heart of the package definition. It contains the package
 
 ```julia
 # === Anatomy of a Project.toml for SpatialStats.jl ===
+
 name = "SpatialStats"
 uuid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
 authors = ["Your Name <you@example.com>"]
 version = "0.1.0"
+
 [deps]
-```
-
 DataFrames     = "a93c6f00-e57d-5684-b466-afe8fa294f38"
-
 GeoInterface   = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
-
 LinearAlgebra  = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
-
 SparseArrays   = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
-
 Statistics     = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
-
 NearestNeighbors = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
-
 Distributions  = "31c24e10-a181-5473-b8eb-7969acd0382f"
-
 Optim          = "429524aa-4258-5aef-a3af-852621145aeb"
 
 [compat]
-
 julia          = "1.9"
-
 DataFrames     = "1"
-
 GeoInterface   = "1"
-
 NearestNeighbors = "0.4"
-
 Distributions  = "0.25"
-
 Optim          = "1"
 
 [extras]
-
 Test = "8dfed614-e22c-358e-ad98-444c0fe70b36"
-
 BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
 
 [targets]
-
 test = ["Test", "BenchmarkTools"]
+```
 
 
 ### 16.1.2 The Load Path and Module System
 
 When Julia executes `using SpatialStats`, it searches the active environment's load path for a directory named SpatialStats with a valid Project.toml containing that package name. It then executes the file src/SpatialStats.jl, which must define a module named SpatialStats. The module's `export` declarations determine which symbols are brought into the caller's namespace. Understanding this load path mechanism is critical for development workflow — specifically for developing against a local checkout of a package under development.
 
-
-### 16.1.3 Module Structure Best Practices
-
 ```julia
 # === Development workflow: use dev instead of add ===
+
 # Add a local package under development to your test environment
 # This creates a symlink in ~/.julia/dev/SpatialStats -> your source directory
 # Changes to source files are reflected immediately (no re-add required)
+
 (@v1.10) pkg> dev /path/to/SpatialStats
+
 # OR: dev from a GitHub branch during active development
 (@v1.10) pkg> dev https://github.com/yourusername/SpatialStats.jl
+
 # Check status — [dev] indicates development mode
 (@v1.10) pkg> st
 # [dev] SpatialStats v0.1.0 `~/dev/SpatialStats`
+
 # Revise.jl: hot-reload source changes without restarting Julia
 # Essential for package development — add to startup.jl
 using Revise
 using SpatialStats   # Now edits to SpatialStats/src/*.jl reload automatically
 ```
 
+
+### 16.1.3 Module Structure Best Practices
+
 A Julia module is the unit of namespace management. Large packages should split their code across multiple source files, each included from the top-level module file via `include()`. The conventional structure is to put the module definition and all includes in src/PackageName.jl, with subdirectories grouping related functionality. The key rule is that `include()` executes the file in the current module's scope — all functions, types, and macros defined in included files are part of the including module unless they define their own submodules.
-
-
-## 16.2 PkgTemplates.jl: Correct Project Scaffolding
 
 ```julia
 # === src/SpatialStats.jl: Top-level module architecture ===
+
 module SpatialStats
+
 # ── Standard library imports (no UUID registration needed) ──
 using LinearAlgebra
 using SparseArrays
 using Statistics
 using Random: shuffle!
+
 # ── Registered package imports ──
 using DataFrames
 using GeoInterface
 using NearestNeighbors
 using Distributions
 using Optim
+
 # ── Public API exports ─────────────────────────────────────
 # Types
 export SpatialWeights, WeightStyle, WeightTransform
 export MoranResult, LISAResult, SpatialRegResult
 export GStatResult, GearyResult
+
 # Weight constructors
 export queen_weights, rook_weights, knn_weights
 export distance_band_weights, inverse_distance_weights
 export lag_spatial
+
 # Autocorrelation
 export moran, moran_local, geary, getis_ord_g
+
 # Regression
 export lm_spatial, slm, sem, gwr
+
 # Utilities
 export choropleth_classify, spatial_lag
+
 # ── Include source files (order matters for dependencies) ──
 include("types/weights.jl")       # SpatialWeights type + constructors
 include("types/results.jl")       # Result structs
@@ -137,8 +133,12 @@ include("regression/slm.jl")      # Spatial Lag Model
 include("regression/sem.jl")      # Spatial Error Model
 include("regression/gwr.jl")      # Geographically Weighted Regression
 include("classify/mapclassify.jl") # Choropleth classification
+
 end # module SpatialStats
 ```
+
+
+## 16.2 PkgTemplates.jl: Correct Project Scaffolding
 
 Never use `Pkg.generate()` for packages intended for community use or General registry registration. PkgTemplates.jl generates the complete scaffolding including GitHub Actions CI/CD, Documenter.jl configuration, CompatHelper automation, TagBot release automation, Codecov integration, and a correct .gitignore. This scaffolding takes five minutes to configure and saves weeks of manual work.
 
@@ -147,93 +147,55 @@ Never use `Pkg.generate()` for packages intended for community use or General re
 julia -e 'import Pkg; Pkg.add("PkgTemplates")'
 # === Template configuration for a JuliaGeo-quality package ===
 using PkgTemplates
+
 tpl = Template(
-user = "yourgithubusername",
-dir  = "~/dev",
-julia = v"1.9",
-plugins = [
-```
-
-License(name="MIT"),
-
-Git(manifest=false, ssh=true),   # Don't commit Manifest for libraries
-
-GitHubActions(;
-
-x86      = false,            # Skip 32-bit testing
-
-osx      = true,             # Test on macOS
-
-linux    = true,
-
-windows  = true,
-
-coverage = true,
-
-julia_version = ["1.9", "1.10", "nightly"],
-
-),
-
-Codecov(),                       # Coverage reporting
-
-Documenter{GitHubActions}(),     # Auto-deploy docs to GitHub Pages
-
-CompatHelper(),                  # Auto-PR for compat updates
-
-TagBot(),                        # Auto-tag releases from GitHub
-
-],
-
+    user = "yourgithubusername",
+    dir  = "~/dev",
+    julia = v"1.9",
+    plugins = [
+        License(name="MIT"),
+        Git(manifest=false, ssh=true),   # Don't commit Manifest for libraries
+        GitHubActions(;
+            x86      = false,            # Skip 32-bit testing
+            osx      = true,             # Test on macOS
+            linux    = true,
+            windows  = true,
+            coverage = true,
+            julia_version = ["1.9", "1.10", "nightly"],
+        ),
+        Codecov(),                       # Coverage reporting
+        Documenter{GitHubActions}(),     # Auto-deploy docs to GitHub Pages
+        CompatHelper(),                  # Auto-PR for compat updates
+        TagBot(),                        # Auto-tag releases from GitHub
+    ],
 )
 
-```julia
 # Generate the package
 tpl("SpatialStats")
 # Creates: ~/dev/SpatialStats/  with complete structure
 # Generated directory structure:
-```
-
 SpatialStats/
-
 ├── .github/
-
 │   ├── dependabot.yml
-
 │   └── workflows/
-
 │       ├── CI.yml          # Run tests on push/PR
-
 │       ├── CompatHelper.yml # Auto-update [compat] bounds
-
 │       └── TagBot.yml      # Auto-tag releases
-
 ├── .gitignore
-
 ├── LICENSE
-
 ├── Manifest.toml           # Gitignored for libraries
-
 ├── Project.toml
-
 ├── README.md
-
 ├── docs/
-
 │   ├── Project.toml        # Doc-build dependencies
-
 │   ├── make.jl             # Documenter.jl build script
-
 │   └── src/
-
 │       └── index.md
-
 ├── src/
-
 │   └── SpatialStats.jl     # Your main module file
-
 └── test/
-
-└── runtests.jl         # Test suite entry point
+    └── runtests.jl         # Test suite entry point
+```
 
 
 ## 16.3 Julia's Type System: The Foundation of Package Design
@@ -248,54 +210,42 @@ Abstract types in Julia cannot be instantiated but serve as nodes in the type hi
 ```julia
 # === Types architecture for SpatialStats.jl ===
 # File: src/types/weights.jl
+
 # ── Abstract type hierarchy ──────────────────────────────────
 """
-```
-
-AbstractSpatialWeights
+    AbstractSpatialWeights
 
 Abstract supertype for all spatial weights representations.
-
 Subtypes must implement:
-
-- Base.size(w) → (n, n)
-
-- Base.getindex(w, i, j) → Float64
-
-- neighbors(w, i) → Vector{Int}
-
-- weights(w, i) → Vector{Float64}
-
-- nobs(w) → Int
-
+  - Base.size(w) → (n, n)
+  - Base.getindex(w, i, j) → Float64
+  - neighbors(w, i) → Vector{Int}
+  - weights(w, i) → Vector{Float64}
+  - nobs(w) → Int
 """
-
-```julia
 abstract type AbstractSpatialWeights end
+
 # ── Enum-like singleton types for weight properties ──────────
 # Using Val() for compile-time dispatch on weight style
 abstract type WeightStyle end
 struct Binary    <: WeightStyle end  # 0/1 adjacency
 struct RowStd    <: WeightStyle end  # row-standardized (rows sum to 1)
 struct GlobalStd <: WeightStyle end  # globally standardized
+
 abstract type WeightTransform end
 struct Queen <: WeightTransform end
 struct Rook  <: WeightTransform end
 struct KNN   <: WeightTransform end
 struct DistBand <: WeightTransform end
+
 # ── Concrete SpatialWeights type ─────────────────────────────
 """
-```
-
-SpatialWeights{S<:WeightStyle, T<:WeightTransform}
+    SpatialWeights{S<:WeightStyle, T<:WeightTransform}
 
 Efficient sparse spatial weights matrix with metadata.
-
 The type parameters S and T enable compile-time dispatch on
-
 weight style and transform type without runtime branching.
 
-```julia
 # Fields
 - `W`:              Row-standardized sparse weights matrix (n × n)
 - `W_binary`:       Binary adjacency matrix (for diagnostics)
@@ -306,102 +256,85 @@ weight style and transform type without runtime branching.
 - `max_neighbors`:  Maximum neighbors
 """
 struct SpatialWeights{S<:WeightStyle, T<:WeightTransform}
-```
-
-W            :: SparseMatrixCSC{Float64, Int}
-
-W_binary     :: SparseMatrixCSC{Bool, Int}
-
-n            :: Int
-
-island_ids   :: Vector{Int}
-
-mean_neighbors :: Float64
-
-min_neighbors :: Int
-
-max_neighbors :: Int
-
-style        :: S
-
-transform    :: T
-
-```julia
+    W            :: SparseMatrixCSC{Float64, Int}
+    W_binary     :: SparseMatrixCSC{Bool, Int}
+    n            :: Int
+    island_ids   :: Vector{Int}
+    mean_neighbors :: Float64
+    min_neighbors :: Int
+    max_neighbors :: Int
+    style        :: S
+    transform    :: T
 end
+
 # ── Interface implementation for AbstractSpatialWeights ──────
-```
-
 Base.size(w::SpatialWeights)     = (w.n, w.n)
-
 nobs(w::SpatialWeights)          = w.n
-
 islands(w::SpatialWeights)       = w.island_ids
-
 nislands(w::SpatialWeights)      = length(w.island_ids)
 
 """Return neighbor indices for unit i (excluding i itself)"""
+function neighbors(w::SpatialWeights, i::Int)
+    @boundscheck 1 <= i <= w.n || throw(BoundsError(w, i))
+    # SparseMatrixCSC stores by column; W[i,j] = weight from j to i
+    # For row i, nonzeros are in w.W[i, :]
+    nz = findnz(w.W[i, :])
+    return nz[1]  # column indices = neighbor indices
+end
+
+"""Return weights for neighbors of unit i"""
+function neighbor_weights(w::SpatialWeights, i::Int)
+    @boundscheck 1 <= i <= w.n || throw(BoundsError(w, i))
+    nz = findnz(w.W[i, :])
+    return nz[2]
+end
+
+# ── Pretty printing ───────────────────────────────────────────
+function Base.show(io::IO, w::SpatialWeights{S,T}) where {S,T}
+    println(io, "SpatialWeights{$(S), $(T)}")
+    println(io, "  n units:          $(w.n)")
+    println(io, "  mean neighbors:   $(round(w.mean_neighbors; digits=2))")
+    println(io, "  islands:          $(nislands(w))")
+    print(io,   "  min/max neighbors: $(w.min_neighbors)/$(w.max_neighbors)")
+end
+```
 
 
 ### 16.3.2 Performance-Critical Type Design: Avoiding Type Instability
-
-```julia
-function neighbors(w::SpatialWeights, i::Int)
-@boundscheck 1 <= i <= w.n || throw(BoundsError(w, i))
-# SparseMatrixCSC stores by column; W[i,j] = weight from j to i
-# For row i, nonzeros are in w.W[i, :]
-nz = findnz(w.W[i, :])
-return nz[1]  # column indices = neighbor indices
-end
-"""Return weights for neighbors of unit i"""
-function neighbor_weights(w::SpatialWeights, i::Int)
-@boundscheck 1 <= i <= w.n || throw(BoundsError(w, i))
-nz = findnz(w.W[i, :])
-return nz[2]
-end
-# ── Pretty printing ───────────────────────────────────────────
-function Base.show(io::IO, w::SpatialWeights{S,T}) where {S,T}
-println(io, "SpatialWeights{$(S), $(T)}")
-println(io, "  n units:          $(w.n)")
-println(io, "  mean neighbors:   $(round(w.mean_neighbors; digits=2))")
-println(io, "  islands:          $(nislands(w))")
-print(io,   "  min/max neighbors: $(w.min_neighbors)/$(w.max_neighbors)")
-end
-```
 
 The single most important performance principle in Julia package development is type stability. A function is type-stable if the return type can be inferred at compile time from the types of its arguments alone, without needing to evaluate the function. Type-unstable functions cause the compiler to insert dynamic type checks at every operation on the unstable value, eliminating the JIT performance advantage. The @code_warntype macro is the essential diagnostic tool — any output highlighted in red indicates a type instability.
 
 ```julia
 # === Diagnosing and fixing type instability ===
+
 # ❌ TYPE-UNSTABLE: return type depends on runtime value
 function bad_normalize(W, style)
-if style == :row      # style is a Symbol — type determined at runtime
-return W ./ sum(W; dims=2)
-elseif style == :global
-return W ./ sum(W)
+    if style == :row      # style is a Symbol — type determined at runtime
+        return W ./ sum(W; dims=2)
+    elseif style == :global
+        return W ./ sum(W)
+    end
+    # Missing else: could return nothing (type: Union{Matrix,Nothing})
 end
-# Missing else: could return nothing (type: Union{Matrix,Nothing})
-end
+
 # Check: @code_warntype bad_normalize(W, :row) — see red Any/Union
+
 # ✅ TYPE-STABLE: dispatch on type parameter instead of Symbol value
 normalize_weights(W, ::RowStd) = W ./ sum(W; dims=2)
 normalize_weights(W, ::GlobalStd) = W ./ sum(W)
 normalize_weights(W, ::Binary) = W
+
 # Called as: normalize_weights(W, RowStd())
 # Compiler sees exactly one code path per dispatch — fully optimized
+
 # ── The @code_warntype workflow ───────────────────────────────
 # Paste this into Julia REPL after loading your package:
 using SpatialStats
-```
-
 W = sprand(100, 100, 0.05); vals = rand(100)
-
-
-### 16.3.3 Parametric Types and Where Clauses
-
-```julia
 @code_warntype moran(vals, SpatialWeights(W, ...))
 # Green output = type-stable ✓
 # Red 'Any' output = type instability to fix ✗
+
 # ── Using @inferred in tests ──────────────────────────────────
 using Test
 @test @inferred(moran(rand(50), sw)) isa MoranResult
@@ -409,83 +342,66 @@ using Test
 # Include in every test for a hot-path function
 ```
 
+
+### 16.3.3 Parametric Types and Where Clauses
+
 Parametric types — types with type parameters — are essential for writing generic, reusable code that is also fast. The key insight is that Julia specializes every generic function for the specific concrete types it is actually called with. A parametric type like Vector{T} where T is an abstract supertype does not cause slowdowns; the compiler generates specialized code for each concrete T it encounters.
 
 ```julia
 # === Parametric types in SpatialStats.jl ===
+
 # ── Generic Moran function: works for any numeric vector type ──
 # The where {T<:Real} constraint ensures the compiler knows
 # arithmetic operations (+, -, *, /) are well-defined
 function moran(
-values::AbstractVector{T},
-w::SpatialWeights;
-method::Symbol = :permutation,
-permutations::Int = 999
-) where {T<:Real}
-# Convert to Float64 only once — avoid repeated conversions
-x = convert(Vector{Float64}, values)
-_moran_impl(x, w, Val(method), permutations)
+        values::AbstractVector{T},
+        w::SpatialWeights;
+        method::Symbol = :permutation,
+        permutations::Int = 999
+    ) where {T<:Real}
+
+    # Convert to Float64 only once — avoid repeated conversions
+    x = convert(Vector{Float64}, values)
+    _moran_impl(x, w, Val(method), permutations)
 end
+
 # ── Val() dispatch: compile-time selection of inference method ──
 # This pattern (Val dispatch) is a core Julia idiom for selecting
 # algorithms at compile time from keyword-like arguments
 _moran_impl(x, w, ::Val{:permutation}, perms) = _moran_permutation(x, w, perms)
 _moran_impl(x, w, ::Val{:analytical}, _)      = _moran_analytical(x, w)
 _moran_impl(x, w, ::Val{:both}, perms) = begin
-r1 = _moran_permutation(x, w, perms)
-r2 = _moran_analytical(x, w)
-# Return tuple — return type is fully known at compile time
-return (permutation=r1, analytical=r2)
+    r1 = _moran_permutation(x, w, perms)
+    r2 = _moran_analytical(x, w)
+    # Return tuple — return type is fully known at compile time
+    return (permutation=r1, analytical=r2)
 end
+
 # ── NamedTuple as a zero-cost result type ─────────────────────
 # NamedTuples are the fastest result container — no heap allocation,
 # fields accessed by name (not index), types are static
 function _moran_analytical(x::Vector{Float64}, w::SpatialWeights)
-n = length(x)
-x̄ = mean(x)
-z = x .- x̄
-```
-
-S0 = sum(w.W)
-
-Wz = w.W * z
-
-numerator   = dot(z, Wz)
-
-denominator = dot(z, z)
-
-I = (n / S0) * (numerator / denominator)
-
-E_I = -1.0 / (n - 1)
-
-```julia
-# Analytical variance (under normality assumption)
-```
-
-S1 = 0.5 * sum((w.W + w.W') .^ 2)
-
-S2 = sum((vec(sum(w.W; dims=1)) .+ vec(sum(w.W; dims=2))) .^ 2)
-
-n2 = Float64(n^2)
-
-b2 = (n * sum(z .^ 4)) / sum(z .^ 2)^2
-
-var_I = (n * ((n2 - 3n + 3)*S1 - n*S2 + 3*S0^2) -
-
-b2 * ((n2 - n)*S1 - 2n*S2 + 6*S0^2)) /
-
-((n-1)*(n-2)*(n-3)*S0^2) - E_I^2
-
-z_score = (I - E_I) / sqrt(var_I)
-
-p_value = 2 * (1 - cdf(Normal(), abs(z_score)))
-
-return MoranResult(I=I, expected=E_I, variance=var_I,
-
-z_score=z_score, p_value=p_value,
-
-method=:analytical)
-
-```julia
+    n = length(x)
+    x̄ = mean(x)
+    z = x .- x̄
+    S0 = sum(w.W)
+    Wz = w.W * z
+    numerator   = dot(z, Wz)
+    denominator = dot(z, z)
+    I = (n / S0) * (numerator / denominator)
+    E_I = -1.0 / (n - 1)
+    # Analytical variance (under normality assumption)
+    S1 = 0.5 * sum((w.W + w.W') .^ 2)
+    S2 = sum((vec(sum(w.W; dims=1)) .+ vec(sum(w.W; dims=2))) .^ 2)
+    n2 = Float64(n^2)
+    b2 = (n * sum(z .^ 4)) / sum(z .^ 2)^2
+    var_I = (n * ((n2 - 3n + 3)*S1 - n*S2 + 3*S0^2) -
+             b2 * ((n2 - n)*S1 - 2n*S2 + 6*S0^2)) /
+            ((n-1)*(n-2)*(n-3)*S0^2) - E_I^2
+    z_score = (I - E_I) / sqrt(var_I)
+    p_value = 2 * (1 - cdf(Normal(), abs(z_score)))
+    return MoranResult(I=I, expected=E_I, variance=var_I,
+                       z_score=z_score, p_value=p_value,
+                       method=:analytical)
 end
 ```

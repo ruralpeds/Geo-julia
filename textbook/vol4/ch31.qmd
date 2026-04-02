@@ -12,161 +12,132 @@ Genie.jl is a full-stack web framework for Julia that enables deploying spatial 
 # === web/app.jl: Genie.jl REST API for Healthcare GIS ===
 # Install: ] add Genie
 # Run: julia web/app.jl
+
 using Genie, Genie.Router, Genie.Renderer.Json
 using DataFrames, JSON3
 using SpatialStats
+
 # ── Pre-load analysis results at startup ─────────────────────
 const ND_DATA = Ref{NamedTuple}()
+
 function __init_analysis__()
-@info "Loading ND analysis data..."
-nd_df = CSV.read("data/processed/nd_analysis_results.csv", DataFrame)
-w     = deserialize("data/processed/nd_weights.jls")  # serialized weights
-```
-
-ND_DATA[] = (; nd_df, w)
-
-```julia
-@info "Analysis data loaded: $(nrow(nd_df)) counties"
+    @info "Loading ND analysis data..."
+    nd_df = CSV.read("data/processed/nd_analysis_results.csv", DataFrame)
+    w     = deserialize("data/processed/nd_weights.jls")  # serialized weights
+    ND_DATA[] = (; nd_df, w)
+    @info "Analysis data loaded: $(nrow(nd_df)) counties"
 end
+
 # ── API Routes ────────────────────────────────────────────────
+
 # GET /api/counties — list all county summaries
 route("/api/counties") do
-df = ND_DATA[].nd_df
-result = [(
-geoid        = r.GEOID,
-name         = r.NAME,
-access_score = r.access_score,
-lisa_cluster = string(r.lisa_cluster),
-poverty_pct  = r.poverty_pct,
-uninsured_pct= r.uninsured_pct
-) for r in eachrow(df)]
-json(result)
+    df = ND_DATA[].nd_df
+    result = [(
+        geoid        = r.GEOID,
+        name         = r.NAME,
+        access_score = r.access_score,
+        lisa_cluster = string(r.lisa_cluster),
+        poverty_pct  = r.poverty_pct,
+        uninsured_pct= r.uninsured_pct
+    ) for r in eachrow(df)]
+    json(result)
 end
+
 # GET /api/county/{geoid} — single county details
 route("/api/county/:geoid") do
-geoid = params(:geoid)
-df    = ND_DATA[].nd_df
-row   = findfirst(==(geoid), df.GEOID)
-isnothing(row) && return json(Dict("error" => "County $(geoid) not found"); status=404)
-r = df[row, :]
-json((
-geoid          = r.GEOID,
-name           = r.NAME,
-access_score   = r.access_score,
-lisa_cluster   = string(r.lisa_cluster),
-poverty_pct    = r.poverty_pct,
-neighbors      = neighbors(ND_DATA[].w, row)
-))
+    geoid = params(:geoid)
+    df    = ND_DATA[].nd_df
+    row   = findfirst(==(geoid), df.GEOID)
+    isnothing(row) && return json(Dict("error" => "County $(geoid) not found"); status=404)
+    r = df[row, :]
+    json((
+        geoid          = r.GEOID,
+        name           = r.NAME,
+        access_score   = r.access_score,
+        lisa_cluster   = string(r.lisa_cluster),
+        poverty_pct    = r.poverty_pct,
+        neighbors      = neighbors(ND_DATA[].w, row)
+    ))
 end
+
 # POST /api/moran — compute Moran's I for custom variable
 route("/api/moran", method=POST) do
-body  = Genie.Requests.jsonpayload()
-vals  = Float64.(body["values"])
-w     = ND_DATA[].w
-length(vals) == nobs(w) ||
-return json(Dict("error" => "Expected $(nobs(w)) values"); status=400)
-result = moran(vals, w)
-json((
-```
-
-I        = result.I,
-
-expected = result.expected_I,
-
-z_score  = result.z_score,
-
-p_value  = result.p_value,
-
-method   = string(result.method)
-
-))
-
-```julia
+    body  = Genie.Requests.jsonpayload()
+    vals  = Float64.(body["values"])
+    w     = ND_DATA[].w
+    length(vals) == nobs(w) ||
+        return json(Dict("error" => "Expected $(nobs(w)) values"); status=400)
+    result = moran(vals, w)
+    json((
+        I        = result.I,
+        expected = result.expected_I,
+        z_score  = result.z_score,
+        p_value  = result.p_value,
+        method   = string(result.method)
+    ))
 end
+
 # GET /api/access?catchment=45 — recompute access with custom catchment
 route("/api/access") do
-catchment_km = parse(Float64, get(params(), :catchment, "45"))
-(1.0 <= catchment_km <= 200.0) ||
-return json(Dict("error" => "catchment must be 1-200 km"); status=400)
-prov = CSV.read("data/processed/providers_geocoded.csv", DataFrame)
-df   = ND_DATA[].nd_df
-providers = DataFrame(lat=prov.lat, lon=prov.lon, supply=ones(nrow(prov)))
-pop_locs  = DataFrame(
-id=1:nrow(df), lat=df.centroid_lat,
-lon=df.centroid_lon, population=coalesce.(df.total_pop, 0.0))
-access = e2sfca(providers, pop_locs, catchment_km; decay=:gaussian)
-json([(geoid=df.GEOID[i], access_score=access.accessibility[i]) for i in 1:nrow(df)])
+    catchment_km = parse(Float64, get(params(), :catchment, "45"))
+    (1.0 <= catchment_km <= 200.0) ||
+        return json(Dict("error" => "catchment must be 1-200 km"); status=400)
+    prov = CSV.read("data/processed/providers_geocoded.csv", DataFrame)
+    df   = ND_DATA[].nd_df
+    providers = DataFrame(lat=prov.lat, lon=prov.lon, supply=ones(nrow(prov)))
+    pop_locs  = DataFrame(
+        id=1:nrow(df), lat=df.centroid_lat,
+        lon=df.centroid_lon, population=coalesce.(df.total_pop, 0.0))
+    access = e2sfca(providers, pop_locs, catchment_km; decay=:gaussian)
+    json([(geoid=df.GEOID[i], access_score=access.accessibility[i]) for i in 1:nrow(df)])
 end
+
 # ── Start server ──────────────────────────────────────────────
 __init_analysis__()
-```
-
 Genie.config.run_as_server = true
-
 Genie.startup(port=8080, async=false)
+```
 
 
 ## 31.2 Containerized Deployment with Docker
 
 ```julia
 # === Dockerfile for HealthcareGIS web service ===
-```
-
 FROM julia:1.10-bullseye
 
 WORKDIR /app
 
-```julia
 # Install system dependencies for GDAL, PROJ, GEOS
-```
-
 RUN apt-get update && apt-get install -y --no-install-recommends \
+    libgdal-dev libproj-dev libgeos-dev \
+    && rm -rf /var/lib/apt/lists/*
 
-libgdal-dev libproj-dev libgeos-dev \
-
-&& rm -rf /var/lib/apt/lists/*
-
-```julia
 # Copy project files
-```
-
 COPY Project.toml Manifest.toml ./
-
 COPY src/ ./src/
-
 COPY web/ ./web/
-
 COPY data/processed/ ./data/processed/
 
-```julia
 # Pre-compile all packages (speeds up container startup)
-```
-
 RUN julia --project=. -e 'import Pkg; Pkg.instantiate()'
-
 RUN julia --project=. -e '
-
-```julia
-using PackageCompiler
-create_sysimage(
-[:Genie, :SpatialStats, :GeoMakie, :DataFrames],
-sysimage_path="/app/geo_sysimage.so",
-precompile_execution_file="web/precompile.jl"
-)'
-```
+    using PackageCompiler
+    create_sysimage(
+        [:Genie, :SpatialStats, :GeoMakie, :DataFrames],
+        sysimage_path="/app/geo_sysimage.so",
+        precompile_execution_file="web/precompile.jl"
+    )'
 
 EXPOSE 8080
 
-```julia
 # Start server using precompiled sysimage (fast startup)
-```
-
 CMD ["julia", "-J/app/geo_sysimage.so", "--project=.", "web/app.jl"]
 
-```julia
 # === Build and run ===
 docker build -t healthcare-geo:latest .
 docker run -p 8080:8080 --env CENSUS_API_KEY=$CENSUS_API_KEY healthcare-geo:latest
+
 # Test the API
 curl http://localhost:8080/api/counties | jq '.[0]'
 curl 'http://localhost:8080/api/access?catchment=30' | jq 'length'

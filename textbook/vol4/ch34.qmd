@@ -15,76 +15,52 @@ This final chapter provides the master Claude Code program that, when executed, 
 # Prerequisites: Julia 1.10+, git, GitHub SSH key configured,
 #                CENSUS_API_KEY environment variable set
 # Estimated time: 4-6 hours on a modern laptop
+
 ## PHASE 0: Environment Setup (5 minutes)
 ```
 
 Execute the following shell commands to prepare the workspace:
 
-```bash
-
+```julia
+# (example: bash)
 mkdir -p ~/dev/julia_geo_ecosystem
-
 cd ~/dev/julia_geo_ecosystem
-
 git init
-
 julia -e 'import Pkg; Pkg.add(["PkgTemplates","Revise","BenchmarkTools","ProfileView"])'
-
-```
+# (end example)
 
 Create the workspace Manifest at ~/dev/julia_geo_ecosystem/Workspace.toml:
-
-```toml
-
+# (example: toml)
 [workspace]
-
 projects = [
-
-"SpatialStats/Project.toml",
-
-"Geocode/Project.toml",
-
-"MapClassify/Project.toml",
-
-"SpatialReg/Project.toml",
-
-"PointPatterns/Project.toml",
-
-"Overpass/Project.toml",
-
-"HealthcareGeo/Project.toml",
-
+    "SpatialStats/Project.toml",
+    "Geocode/Project.toml",
+    "MapClassify/Project.toml",
+    "SpatialReg/Project.toml",
+    "PointPatterns/Project.toml",
+    "Overpass/Project.toml",
+    "HealthcareGeo/Project.toml",
 ]
-
-```
+# (end example)
 
 ## PHASE 1: SpatialStats.jl (Days 1-10)
-
 Execute specs/pkg01_spatialstats.md in full.
-
 Milestone: All 6 test files pass, @inferred for all hot-path functions.
-
 Benchmark target: queen_weights(53 counties) < 1s, moran(999 perms) < 2s.
 
 ## PHASE 2: Geocode.jl (Days 11-14)
-
 Execute specs/pkg02_geocode.md in full.
-
 Milestone: Census geocoder correctly geocodes Bismarck ND city hall.
-
 Chunked geocoding of 5,000 synthetic addresses completes without error.
 
 ## PHASE 3: MapClassify.jl (Days 15-17)
-
 Execute specs/pkg03_mapclassify.md in full.
-
 Milestone: All 8 classification schemes produce valid sorted break arrays.
-
 Natural breaks on lognormal data matches mapclassify Python reference.
 
 ## PHASE 4: SpatialReg.jl (Days 18-23)
-
 Execute specs/pkg04_spatialreg.md in full.
+```
 
 Milestone: SLM rho estimate within 0.005 of PySAL on same synthetic data.
 
@@ -127,30 +103,21 @@ Implement the Pluto.jl dashboard from Chapter 30.
 Run the complete integration test:
 
 ```julia
-
-```julia
+# (example: julia)
 using SpatialStats, Geocode, MapClassify, PointPatterns, Overpass
 include("test/integration_test.jl")
-```
-```
+# (end example)
 
 All of the following must pass:
-
 - queen_weights(53 ND counties) → 53-unit weights, mean_neighbors ≈ 5.2
-
 - moran(nd_cvd_rates, w) → I > 0.2, p < 0.05 (CVD rates are spatially clustered)
-
 - moran_local: at least 3 HH clusters identified in southwestern ND
-
 - geocode_batch(10 ND addresses) → ≥8 matches
-
 - classify(nd_pov_rates, NaturalBreaks(5)) → 5 valid classes
-
 - scan_statistic on ND CVD data → identifies cluster in known high-rate region
-
 - download_healthcare_pois(nd_bbox) → nrow > 50
-
 - slm(nd_cvd, X, w) → rho significant at p < 0.05
+```
 
 Tag v0.1.0 for all 6 packages and submit to General registry:
 

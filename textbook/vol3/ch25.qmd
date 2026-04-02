@@ -14,79 +14,77 @@ This chapter provides a day-by-day execution plan for building and registering S
 ```julia
 # CLAUDE CODE SPEC: Integration Test After All Packages Built
 # File: specs/final_integration_test.md
+
 ## Objective
-```
-
 Verify that all six packages work together in a complete
-
-```julia
 end-to-end rural healthcare geographic analysis workflow.
+
 ## Test Scenario
-```
-
 Analyze primary care access in North Dakota counties using:
-
-- SpatialStats.jl: spatial weights and Moran's I
-
-- Geocode.jl: geocode provider addresses
-
-- SpatialReg.jl: spatial lag model of CVD mortality
-
-- Overpass.jl: download road network
-
-- MapClassify.jl: classify results for choropleth mapping
+  - SpatialStats.jl: spatial weights and Moran's I
+  - Geocode.jl: geocode provider addresses
+  - SpatialReg.jl: spatial lag model of CVD mortality
+  - Overpass.jl: download road network
+  - MapClassify.jl: classify results for choropleth mapping
 
 ## Integration Test Code
-
-```julia
-
-```julia
+# (example: julia)
 using SpatialStats, Geocode, MapClassify, Overpass
 using DataFrames, CSV, Shapefile, GeoMakie, CairoMakie
+
 # 1. Load North Dakota county boundaries
 nd_counties = Shapefile.Table("nd_counties.shp") |> DataFrame
+
 # 2. Build queen contiguity weights
 w = queen_weights(nd_counties.geometry)
 @assert w.n == 53  # North Dakota has 53 counties
 @assert 0.0 < w.mean_neighbors < 8.0
+
 # 3. Load and geocode provider addresses
 providers = CSV.read("nd_providers.csv", DataFrame)
 g = CensusGeocoder()
 geocoded = geocode_all(g, providers; batch_size=500)
 @assert !all(ismissing, geocoded.lat)
+
 # 4. Run Moran's I on CVD mortality
 cvd_rates = CSV.read("nd_cvd_rates.csv", DataFrame).rate
 mi = moran(cvd_rates, w; method=:permutation, permutations=999)
 println("Moran's I = $(round(mi.I; digits=4)), p = $(round(mi.p_value; digits=4))")
+
 # 5. Compute LISA cluster map
 lisa_result = moran_local(cvd_rates, w)
 n_hh = count(==(:HH), lisa_result.cluster)
 println("Hot spots (HH clusters): $(n_hh) counties")
+
 # 6. Classify rates for choropleth
 breaks = classify(cvd_rates, NaturalBreaks(5))
 @assert length(breaks.bins) == 6  # 5 classes = 6 break points
+
 # 7. Download road network from OSM
 bbox = (45.9, -104.0, 49.0, -96.5)  # North Dakota extent
 osm_xml = download_road_network(bbox; transport=:drive)
 @assert length(osm_xml) > 100  # Non-empty XML returned
+
 # 8. Draw LISA cluster map
 fig = Figure(resolution=(1200,800))
 ga  = GeoAxis(fig[1,1];
-dest  = "+proj=laea +lat_0=47 +lon_0=-100",
-title = "CVD Mortality LISA Clusters — North Dakota")
+    dest  = "+proj=laea +lat_0=47 +lon_0=-100",
+    title = "CVD Mortality LISA Clusters — North Dakota")
+
 cluster_colors = Dict(:HH=>:red, :LL=>:blue, :HL=>:orange,
-:LH=>:lightblue, :NS=>:white)
+                       :LH=>:lightblue, :NS=>:white)
 colors = [cluster_colors[c] for c in lisa_result.cluster]
 poly!(ga, nd_counties.geometry;
-color=colors, strokecolor=:black, strokewidth=0.5)
+    color=colors, strokecolor=:black, strokewidth=0.5)
 save("nd_lisa_map.pdf", fig)
+
 println("\n✓ All integration tests passed.")
 println("✓ SpatialStats.jl: weights + autocorrelation")
 println("✓ Geocode.jl: address geocoding")
 println("✓ MapClassify.jl: natural breaks classification")
 println("✓ Overpass.jl: road network download")
 println("✓ GeoMakie.jl: LISA cluster map rendered")
-```
-```
+# (end example)
 
 END — Volume III: Julia Geospatial Package Engineering — 2026 Edition
+```

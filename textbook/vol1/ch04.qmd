@@ -23,11 +23,12 @@ Statistical inference for Moran's I is typically based on either a normal approx
 
 ```julia
 using LinearAlgebra, Statistics, DataFrames
+
 """
-compute_morans_i(values, W; permutations=999)
-```
+    compute_morans_i(values, W; permutations=999)
 
 Compute Global Moran's I with permutation-based inference.
+```
 
 W should be row-standardized (rows sum to 1).
 
@@ -37,62 +38,44 @@ Returns (I, z_score, p_value, expected_I)
 
 ```julia
 function compute_morans_i(values::Vector{Float64}, W::Matrix{Float64};
-permutations::Int = 999)
-n = length(values)
-@assert size(W) == (n, n) "W must be n×n"
-# Row-standardize W
+                           permutations::Int = 999)
+    n = length(values)
+    @assert size(W) == (n, n) "W must be n×n"
+
+    # Row-standardize W
+    W_std = W ./ (sum(W; dims=2) .+ 1e-12)
+
+    x_bar = mean(values)
+    z = values .- x_bar
+    denominator = sum(z.^2)
+    denominator == 0.0 && return (0.0, 0.0, 1.0, -1/(n-1))
+
+    # Compute observed I
+    Wz = W_std * z
+    I_obs = (n / sum(W_std)) * dot(z, Wz) / denominator
+
+    # Permutation test
+    I_perm = Vector{Float64}(undef, permutations)
+    perm_vals = copy(values)
+    for k in 1:permutations
+        shuffle!(perm_vals)
+        z_perm = perm_vals .- mean(perm_vals)
+        Wz_perm = W_std * z_perm
+        denom_perm = sum(z_perm.^2)
+        I_perm[k] = (n / sum(W_std)) * dot(z_perm, Wz_perm) / denom_perm
+    end
+
+    # Empirical p-value (two-tailed)
+    p_value = mean(abs.(I_perm) .>= abs(I_obs))
+    z_score = (I_obs - mean(I_perm)) / std(I_perm)
+    expected_I = -1.0 / (n - 1)
+
+    return (I_obs, z_score, p_value, expected_I)
+end
 ```
-
-W_std = W ./ (sum(W; dims=2) .+ 1e-12)
-
-x_bar = mean(values)
-
-z = values .- x_bar
-
-denominator = sum(z.^2)
-
-denominator == 0.0 && return (0.0, 0.0, 1.0, -1/(n-1))
-
-```julia
-# Compute observed I
-```
-
-Wz = W_std * z
-
-I_obs = (n / sum(W_std)) * dot(z, Wz) / denominator
-
-```julia
-# Permutation test
-```
-
-I_perm = Vector{Float64}(undef, permutations)
-
-perm_vals = copy(values)
-
-for k in 1:permutations
-
-shuffle!(perm_vals)
-
-z_perm = perm_vals .- mean(perm_vals)
-
-Wz_perm = W_std * z_perm
-
-denom_perm = sum(z_perm.^2)
-
-I_perm[k] = (n / sum(W_std)) * dot(z_perm, Wz_perm) / denom_perm
 
 
 ## 4.3 LISA: Local Indicators of Spatial Association
-
-```julia
-end
-# Empirical p-value (two-tailed)
-p_value = mean(abs.(I_perm) .>= abs(I_obs))
-z_score = (I_obs - mean(I_perm)) / std(I_perm)
-expected_I = -1.0 / (n - 1)
-return (I_obs, z_score, p_value, expected_I)
-end
-```
 
 Luc Anselin's Local Indicators of Spatial Association (LISA), published in 1995, extend the global Moran's I framework to produce location-specific measures of spatial autocorrelation. The local Moran's I for location i is defined as:
 
@@ -121,88 +104,56 @@ pop_locs:  DataFrame with columns :lat, :lon, :population, :id
 
 catchment_km: catchment radius in kilometers
 
+```julia
 decay_fn: optional distance-decay function (d -> weight); default = step
-
 """
-
-```julia
 function two_step_fca(providers::DataFrame, pop_locs::DataFrame,
-catchment_km::Float64;
-decay_fn::Union{Nothing, Function} = nothing)
-n_prov = nrow(providers)
-n_pop  = nrow(pop_locs)
-# Step 1: compute provider-to-population ratios
-```
+                       catchment_km::Float64;
+                       decay_fn::Union{Nothing, Function} = nothing)
+    n_prov = nrow(providers)
+    n_pop  = nrow(pop_locs)
 
-R = Vector{Float64}(undef, n_prov)
+    # Step 1: compute provider-to-population ratios
+    R = Vector{Float64}(undef, n_prov)
+    for j in 1:n_prov
+        pj = (providers.lat[j], providers.lon[j])
+        total_pop = 0.0
+        for k in 1:n_pop
+            pk = (pop_locs.lat[k], pop_locs.lon[k])
+            d = haversine(pj, pk)
+            if d <= catchment_km
+                w = isnothing(decay_fn) ? 1.0 : decay_fn(d)
+                total_pop += w * pop_locs.population[k]
+            end
+        end
+        R[j] = total_pop > 0 ? providers.supply[j] / total_pop : 0.0
+    end
 
-for j in 1:n_prov
+    # Step 2: sum ratios for each population location
+    A = Vector{Float64}(undef, n_pop)
+    for i in 1:n_pop
+        pi = (pop_locs.lat[i], pop_locs.lon[i])
+        acc = 0.0
+        for j in 1:n_prov
+            pj = (providers.lat[j], providers.lon[j])
+            d = haversine(pi, pj)
+            if d <= catchment_km
+                w = isnothing(decay_fn) ? 1.0 : decay_fn(d)
+                acc += w * R[j]
+            end
+        end
+        A[i] = acc
+    end
 
-pj = (providers.lat[j], providers.lon[j])
-
-total_pop = 0.0
-
-for k in 1:n_pop
-
-pk = (pop_locs.lat[k], pop_locs.lon[k])
-
-d = haversine(pj, pk)
-
-if d <= catchment_km
-
-w = isnothing(decay_fn) ? 1.0 : decay_fn(d)
-
-total_pop += w * pop_locs.population[k]
-
-```julia
+    return DataFrame(id = pop_locs.id, accessibility = A)
 end
-end
-```
 
-R[j] = total_pop > 0 ? providers.supply[j] / total_pop : 0.0
-
-```julia
-end
-# Step 2: sum ratios for each population location
-```
-
-A = Vector{Float64}(undef, n_pop)
-
-for i in 1:n_pop
-
-pi = (pop_locs.lat[i], pop_locs.lon[i])
-
-acc = 0.0
-
-for j in 1:n_prov
-
-pj = (providers.lat[j], providers.lon[j])
-
-d = haversine(pi, pj)
-
-if d <= catchment_km
-
-w = isnothing(decay_fn) ? 1.0 : decay_fn(d)
-
-acc += w * R[j]
-
-```julia
-end
-end
-```
-
-A[i] = acc
-
-
-## 4.5 Geographically Weighted Regression in Julia
-
-```julia
-end
-return DataFrame(id = pop_locs.id, accessibility = A)
-end
 # Gaussian decay function
 gaussian_decay(sigma) = d -> exp(-0.5 * (d/sigma)^2)
 ```
+
+
+## 4.5 Geographically Weighted Regression in Julia
 
 Geographically Weighted Regression (GWR) is a spatial analytical technique developed by Brunsdon, Fotheringham, and Charlton in the late 1990s that allows regression coefficients to vary across space. Standard (global) regression assumes that the relationship between predictors and outcome is the same everywhere in the study area — an assumption that is frequently violated in health research. GWR relaxes this assumption by fitting a separate weighted regression at each spatial location, with weights defined by a kernel function that gives more weight to nearby observations.
 
@@ -226,40 +177,34 @@ Returns DataFrame with local coefficients for each location.
 
 ```julia
 function gwr(y::Vector{Float64}, X::Matrix{Float64},
-coords::Matrix{Float64};
-bandwidth_km::Float64 = 50.0,
-kernel::Symbol = :bisquare)
-n, p = size(X)
-coefs = Matrix{Float64}(undef, n, p)
-kernel_fn = if kernel == :bisquare
-(d, bw) -> d < bw ? (1 - (d/bw)^2)^2 : 0.0
-else  # gaussian
-(d, bw) -> exp(-0.5 * (d/bw)^2)
-end
-for i in 1:n
-# Compute distances from location i to all other locations
-w = Vector{Float64}(undef, n)
-for k in 1:n
-ci = (coords[i,1], coords[i,2])
-ck = (coords[k,1], coords[k,2])
-d = haversine(ci, ck)
-w[k] = kernel_fn(d, bandwidth_km)
-end
-```
+              coords::Matrix{Float64};
+              bandwidth_km::Float64 = 50.0,
+              kernel::Symbol = :bisquare)
+    n, p = size(X)
+    coefs = Matrix{Float64}(undef, n, p)
 
-W = Diagonal(w)
+    kernel_fn = if kernel == :bisquare
+        (d, bw) -> d < bw ? (1 - (d/bw)^2)^2 : 0.0
+    else  # gaussian
+        (d, bw) -> exp(-0.5 * (d/bw)^2)
+    end
 
-```julia
-# Weighted least squares: β = (X'WX)⁻¹ X'Wy
-```
+    for i in 1:n
+        # Compute distances from location i to all other locations
+        w = Vector{Float64}(undef, n)
+        for k in 1:n
+            ci = (coords[i,1], coords[i,2])
+            ck = (coords[k,1], coords[k,2])
+            d = haversine(ci, ck)
+            w[k] = kernel_fn(d, bandwidth_km)
+        end
+        W = Diagonal(w)
+        # Weighted least squares: β = (X'WX)⁻¹ X'Wy
+        XtW = X' * W
+        coefs[i, :] = (XtW * X) \ (XtW * y)
+    end
 
-XtW = X' * W
-
-coefs[i, :] = (XtW * X) \ (XtW * y)
-
-```julia
-end
-col_names = [Symbol("beta_$(i)") for i in 1:p]
-return DataFrame(coefs, col_names)
+    col_names = [Symbol("beta_$(i)") for i in 1:p]
+    return DataFrame(coefs, col_names)
 end
 ```

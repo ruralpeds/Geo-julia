@@ -10,190 +10,191 @@ A package that passes its own tests is not necessarily correct — it depends on
 
 ```julia
 # === test/runtests.jl: Complete test suite structure ===
-using Test, SpatialStats, SparseArrays, Random
-# Fix random seed for reproducibility of permutation tests
-```
 
+using Test, SpatialStats, SparseArrays, Random
+
+# Fix random seed for reproducibility of permutation tests
 Random.seed!(42)
 
-```julia
 @testset "SpatialStats.jl" begin
-@testset "Spatial Weights" begin
-include("test_weights.jl")
+
+    @testset "Spatial Weights" begin
+        include("test_weights.jl")
+    end
+
+    @testset "Global Autocorrelation" begin
+        include("test_morans.jl")
+    end
+
+    @testset "LISA" begin
+        include("test_lisa.jl")
+    end
+
+    @testset "Spatial Regression" begin
+        include("test_regression.jl")
+    end
+
+    @testset "Type stability" begin
+        include("test_typestability.jl")
+    end
+
+    @testset "Performance benchmarks" begin
+        include("test_benchmarks.jl")
+    end
+
 end
-@testset "Global Autocorrelation" begin
-include("test_morans.jl")
-end
-@testset "LISA" begin
-include("test_lisa.jl")
-end
-@testset "Spatial Regression" begin
-include("test_regression.jl")
-end
-@testset "Type stability" begin
-include("test_typestability.jl")
-end
-@testset "Performance benchmarks" begin
-include("test_benchmarks.jl")
-end
-end
+
 # =========================================================
 # === test/test_morans.jl: Known-result and property tests ===
+
 using SpatialStats, SparseArrays, Test, Statistics
+
 @testset "Moran's I Known Results" begin
-# ── Test 1: Perfect positive spatial autocorrelation ──────
-# Construct a 4x4 grid where left half = 0, right half = 1
-# Expected: high positive I (strong spatial clustering)
-n = 16
-vals = Float64[repeat([0.0], 8)..., repeat([1.0], 8)...]
-```
 
-W = _make_grid_weights(4, 4)  # Helper: queen weights on 4x4 grid
+    # ── Test 1: Perfect positive spatial autocorrelation ──────
+    # Construct a 4x4 grid where left half = 0, right half = 1
+    # Expected: high positive I (strong spatial clustering)
+    n = 16
+    vals = Float64[repeat([0.0], 8)..., repeat([1.0], 8)...]
+    W = _make_grid_weights(4, 4)  # Helper: queen weights on 4x4 grid
+    w = SpatialWeights(W, Bool.(W.>0), n, Int[], mean(sum(W.>0;dims=2)), 0, 0, RowStd(), Queen())
 
-w = SpatialWeights(W, Bool.(W.>0), n, Int[], mean(sum(W.>0;dims=2)), 0, 0, RowStd(), Queen())
+    result = moran(vals, w; method=:analytical)
+    @test result.I > 0.5              # Strong positive autocorrelation
+    @test result.p_value < 0.01      # Highly significant
+    @test result.I > result.expected_I  # Above expected
 
-result = moran(vals, w; method=:analytical)
+    # ── Test 2: Perfect negative autocorrelation (checkerboard) ──
+    # Alternating 0 and 1 on a grid: maximum negative autocorrelation
+    checker = Float64[mod(i+j, 2) for i in 1:4 for j in 1:4]
+    result_neg = moran(checker, w; method=:analytical)
+    @test result_neg.I < -0.3        # Negative autocorrelation
 
-```julia
-@test result.I > 0.5              # Strong positive autocorrelation
-@test result.p_value < 0.01      # Highly significant
-@test result.I > result.expected_I  # Above expected
-# ── Test 2: Perfect negative autocorrelation (checkerboard) ──
-# Alternating 0 and 1 on a grid: maximum negative autocorrelation
-checker = Float64[mod(i+j, 2) for i in 1:4 for j in 1:4]
-result_neg = moran(checker, w; method=:analytical)
-@test result_neg.I < -0.3        # Negative autocorrelation
-# ── Test 3: Spatial randomness (shuffled values) ──────────
-# After many permutations, Moran's I should be near expected_I
-rng = MersenneTwister(123)
-rand_vals = rand(rng, n)
-result_rand = moran(rand_vals, w; method=:permutation, permutations=999)
-# p-value should NOT be extreme (not always true, but usually passes)
-@test 0.0 <= result_rand.p_value <= 1.0
-@test result_rand.method == :permutation
-# ── Test 4: Mathematical invariants (property tests) ──────
-# Moran's I = (n/S0) * z'Wz / z'z
-# Verify our implementation matches this formula exactly
-for _ in 1:10
-v = randn(n)
-r = moran(v, w; method=:analytical)
-x̄ = mean(v); z = v .- x̄
-```
+    # ── Test 3: Spatial randomness (shuffled values) ──────────
+    # After many permutations, Moran's I should be near expected_I
+    rng = MersenneTwister(123)
+    rand_vals = rand(rng, n)
+    result_rand = moran(rand_vals, w; method=:permutation, permutations=999)
+    # p-value should NOT be extreme (not always true, but usually passes)
+    @test 0.0 <= result_rand.p_value <= 1.0
+    @test result_rand.method == :permutation
 
-S0 = sum(W)
+    # ── Test 4: Mathematical invariants (property tests) ──────
+    # Moran's I = (n/S0) * z'Wz / z'z
+    # Verify our implementation matches this formula exactly
+    for _ in 1:10
+        v = randn(n)
+        r = moran(v, w; method=:analytical)
+        x̄ = mean(v); z = v .- x̄
+        S0 = sum(W)
+        expected_I = (n/S0) * (z' * W * z) / dot(z,z)
+        @test isapprox(r.I, expected_I; rtol=1e-10)
+    end
 
-expected_I = (n/S0) * (z' * W * z) / dot(z,z)
+    # ── Test 5: All-same values should return I = 0 (degenerate) ──
+    const_vals = fill(5.0, n)
+    result_const = moran(const_vals, w; method=:analytical)
+    @test isapprox(result_const.I, 0.0; atol=1e-10)
 
-```julia
-@test isapprox(r.I, expected_I; rtol=1e-10)
+    # ── Test 6: Comparison to reference implementation ─────────
+    # Values from PySAL esda.Moran applied to Columbus OH dataset
+    # HOVAL variable, Moran's I = 0.4056, z = 3.72, p = 0.0002
+    # (These numbers from PySAL documentation examples)
+    # Load the Columbus dataset and compare
+    # @test isapprox(result_col.I, 0.4056; atol=0.002)
+    # @test isapprox(result_col.z_score, 3.72; atol=0.1)
+
 end
-# ── Test 5: All-same values should return I = 0 (degenerate) ──
-const_vals = fill(5.0, n)
-result_const = moran(const_vals, w; method=:analytical)
-@test isapprox(result_const.I, 0.0; atol=1e-10)
-# ── Test 6: Comparison to reference implementation ─────────
-# Values from PySAL esda.Moran applied to Columbus OH dataset
-# HOVAL variable, Moran's I = 0.4056, z = 3.72, p = 0.0002
-# (These numbers from PySAL documentation examples)
-# Load the Columbus dataset and compare
-# @test isapprox(result_col.I, 0.4056; atol=0.002)
-# @test isapprox(result_col.z_score, 3.72; atol=0.1)
-end
+
 # =========================================================
 # === test/test_typestability.jl ===
+
 @testset "Type Stability" begin
-using Test: @inferred
-n = 20
-vals = rand(n)
+
+    using Test: @inferred
+    n = 20
+    vals = rand(n)
+    W = sprand(n, n, 0.3); W = (W + W') / 2; W[diagind(W)] .= 0
+    W = W ./ max.(vec(sum(W;dims=2)), 1e-10)
+    w = _make_weights_from_sparse(W)  # internal helper
+
+    # @inferred throws a test failure if return type is not fully determined
+    @test @inferred(moran(vals, w)) isa MoranResult
+    @test @inferred(moran_local(vals, w)) isa LISAResult
+    @test @inferred(queen_weights(dummy_geoms)) isa SpatialWeights
+
+end
 ```
-
-W = sprand(n, n, 0.3); W = (W + W') / 2; W[diagind(W)] .= 0
-
-W = W ./ max.(vec(sum(W;dims=2)), 1e-10)
-
-w = _make_weights_from_sparse(W)  # internal helper
 
 
 ## 21.2 Documenter.jl: Production-Quality API Documentation
 
 ```julia
-# @inferred throws a test failure if return type is not fully determined
-@test @inferred(moran(vals, w)) isa MoranResult
-@test @inferred(moran_local(vals, w)) isa LISAResult
-@test @inferred(queen_weights(dummy_geoms)) isa SpatialWeights
-end
 # === docs/make.jl ===
 using Documenter, SpatialStats
+
 makedocs(
-sitename = "SpatialStats.jl",
-authors  = "Your Name and contributors",
-modules  = [SpatialStats],
-format   = Documenter.HTML(
-prettyurls = get(ENV, "CI", nothing) == "true",
-canonical  = "https://yourusername.github.io/SpatialStats.jl/stable/",
-assets     = ["assets/custom.css"],
-),
-pages = [
-"Home"      => "index.md",
-"User Guide" => [
-"Getting Started"       => "guide/quickstart.md",
-"Spatial Weights"       => "guide/weights.md",
-"Autocorrelation"       => "guide/autocorrelation.md",
-"Spatial Regression"    => "guide/regression.md",
-"LISA Cluster Maps"     => "guide/visualization.md",
-],
-"API Reference" => [
-"Weights"     => "api/weights.md",
-"Statistics"  => "api/statistics.md",
-"Regression"  => "api/regression.md",
-],
-"Theory"    => "theory.md",
-"Changelog" => "changelog.md",
-],
-doctest = true,   # Run all doctests in docstrings
-strict  = true,   # Fail on warnings
+    sitename = "SpatialStats.jl",
+    authors  = "Your Name and contributors",
+    modules  = [SpatialStats],
+    format   = Documenter.HTML(
+        prettyurls = get(ENV, "CI", nothing) == "true",
+        canonical  = "https://yourusername.github.io/SpatialStats.jl/stable/",
+        assets     = ["assets/custom.css"],
+    ),
+    pages = [
+        "Home"      => "index.md",
+        "User Guide" => [
+            "Getting Started"       => "guide/quickstart.md",
+            "Spatial Weights"       => "guide/weights.md",
+            "Autocorrelation"       => "guide/autocorrelation.md",
+            "Spatial Regression"    => "guide/regression.md",
+            "LISA Cluster Maps"     => "guide/visualization.md",
+        ],
+        "API Reference" => [
+            "Weights"     => "api/weights.md",
+            "Statistics"  => "api/statistics.md",
+            "Regression"  => "api/regression.md",
+        ],
+        "Theory"    => "theory.md",
+        "Changelog" => "changelog.md",
+    ],
+    doctest = true,   # Run all doctests in docstrings
+    strict  = true,   # Fail on warnings
 )
+
 deploydocs(
-repo  = "github.com/yourusername/SpatialStats.jl.git",
-devbranch = "main",
-push_preview = true,  # Build docs for PRs
+    repo  = "github.com/yourusername/SpatialStats.jl.git",
+    devbranch = "main",
+    push_preview = true,  # Build docs for PRs
 )
+
 # === Docstring format (in source file) ===
 """
-moran(values, w; method=:permutation, permutations=999)
-```
+    moran(values, w; method=:permutation, permutations=999)
 
 Compute Global Moran's I statistic for spatial autocorrelation.
 
-```julia
 # Arguments
 - `values::AbstractVector{<:Real}`: The variable to test.
 - `w::AbstractSpatialWeights`: A spatial weights object.
 - `method::Symbol`: Inference approach. Options:
-- `:permutation` (default): Monte Carlo permutation test. More accurate
-for non-normal data such as disease rates.
-- `:analytical`: Normal approximation. Faster but assumes normality.
+  - `:permutation` (default): Monte Carlo permutation test. More accurate
+    for non-normal data such as disease rates.
+  - `:analytical`: Normal approximation. Faster but assumes normality.
 - `permutations::Int=999`: Number of Monte Carlo simulations.
+
 # Returns
-```
-
 A [`MoranResult`](@ref) named tuple with fields:
-
 - `I::Float64`: Observed Moran's I statistic
-
 - `expected_I::Float64`: Expected value under spatial randomness (-1/(n-1))
-
 - `variance::Float64`: Estimated variance under the null
-
 - `z_score::Float64`: Standardized test statistic
-
 - `p_value::Float64`: Two-tailed p-value
-
 - `method::Symbol`: Inference method used
 
-```julia
 # Examples
-```jldoctest
+# (example: jldoctest)
 julia> using SpatialStats
 julia> w = queen_weights(counties.geometry)
 julia> result = moran(counties.cvd_rate, w)
@@ -201,76 +202,75 @@ julia> result.I
 0.4230
 julia> result.p_value < 0.05
 true
-```
+# (end example)
+
 # References
-```
-
 Moran, P.A.P. (1950). Notes on continuous stochastic phenomena.
-
 *Biometrika*, 37(1-2), 17-23. doi:10.2307/2332142
-
 """
+function moran(...)
+```
 
 
 ## 21.3 CI/CD: GitHub Actions Configuration
 
 ```julia
-function moran(...)
 # === .github/workflows/CI.yml (generated by PkgTemplates, here annotated) ===
 name: CI
 on:
-push:
-branches:
-- main
-- 'release-*'
-pull_request:
+  push:
+    branches:
+      - main
+      - 'release-*'
+  pull_request:
+
 jobs:
-test:
-name: Julia ${{ matrix.version }} - ${{ matrix.os }}
-runs-on: ${{ matrix.os }}
-timeout-minutes: 60
-strategy:
-fail-fast: false
-matrix:
-version:
-- '1.9'       # Minimum supported version (per [compat])
-- '1.10'      # Current LTS
-- 'nightly'   # Catch upcoming breaking changes early
-os:
-- ubuntu-latest
-- macOS-latest
-- windows-latest
-steps:
-- uses: actions/checkout@v4
-- uses: julia-actions/setup-julia@v2
-with:
-version: ${{ matrix.version }}
-- uses: actions/cache@v4
-with:
-path: |
-~/.julia/artifacts
-~/.julia/packages
-~/.julia/registries
-key: ${{ runner.os }}-julia-${{ matrix.version }}-${{ hashFiles('**/Project.toml') }}
-- uses: julia-actions/julia-buildpkg@v1
-# Instantiates Project.toml and downloads all dependencies
-- uses: julia-actions/julia-runtest@v1
-# Runs test/runtests.jl
-env:
-# Set to 1 to skip slow benchmark tests in CI
+  test:
+    name: Julia ${{ matrix.version }} - ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        version:
+          - '1.9'       # Minimum supported version (per [compat])
+          - '1.10'      # Current LTS
+          - 'nightly'   # Catch upcoming breaking changes early
+        os:
+          - ubuntu-latest
+          - macOS-latest
+          - windows-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.version }}
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.julia/artifacts
+            ~/.julia/packages
+            ~/.julia/registries
+          key: ${{ runner.os }}-julia-${{ matrix.version }}-${{ hashFiles('**/Project.toml') }}
+
+      - uses: julia-actions/julia-buildpkg@v1
+        # Instantiates Project.toml and downloads all dependencies
+
+      - uses: julia-actions/julia-runtest@v1
+        # Runs test/runtests.jl
+        env:
+          # Set to 1 to skip slow benchmark tests in CI
+          SPATIALSTATS_SKIP_BENCHMARKS: '1'
+
+      - uses: julia-actions/julia-processcoverage@v1
+      - uses: codecov/codecov-action@v4
+        with:
+          token: ${{ secrets.CODECOV_TOKEN }}
+          file: lcov.info
 ```
-
-SPATIALSTATS_SKIP_BENCHMARKS: '1'
-
-- uses: julia-actions/julia-processcoverage@v1
-
-- uses: codecov/codecov-action@v4
-
-with:
-
-token: ${{ secrets.CODECOV_TOKEN }}
-
-file: lcov.info
 
 
 ## 21.4 Registering in the Julia General Registry
@@ -289,29 +289,31 @@ Registration in the Julia General Registry makes your package installable by any
 # 8. Package name ends with .jl on GitHub but is registered without .jl
 # 9. Package is NOT 'vibe-coded' (LLM-generated without human review)
 # 10. Package provides substantive, general-purpose functionality
+
 # ── Trigger registration via JuliaRegistrator ─────────────────
 # 1. Make sure your package is tagged with a version:
 git tag v0.1.0
 git push origin v0.1.0
+
 # 2. Go to GitHub, find the commit or tag
 # 3. Add a comment on the commit:
 @JuliaRegistrator register
+
 # 4. JuliaRegistrator opens a PR to General registry automatically
 # 5. AutoMerge bot checks requirements and merges if all pass
 # 6. After merge, package is installable: ] add SpatialStats
+
 # ── Version bumping for updates ───────────────────────────────
 # Use semantic versioning: MAJOR.MINOR.PATCH
 # PATCH: bug fixes only (0.1.0 → 0.1.1)
 # MINOR: new features, backward compatible (0.1.0 → 0.2.0)
 # MAJOR: breaking changes (0.x.x → 1.0.0)
+
 # TagBot (configured by PkgTemplates) automatically creates
 # GitHub releases when a new version is registered
 ℹ NOTE  The General registry explicitly states that packages produced with AI assistance
-are acceptable as long as they have been reviewed and tested by a human developer.
+        are acceptable as long as they have been reviewed and tested by a human developer.
+        Packages that are 'vibe-coded' (generated by LLM without human review) will be
+        rejected. All code in these packages must be reviewed, tested, and understood by
+        a human contributor before submission.
 ```
-
-Packages that are 'vibe-coded' (generated by LLM without human review) will be
-
-rejected. All code in these packages must be reviewed, tested, and understood by
-
-a human contributor before submission.

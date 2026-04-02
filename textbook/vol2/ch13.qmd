@@ -36,95 +36,94 @@ A tidycensus-equivalent for Julia would substantially lower the barrier to Censu
 ```julia
 # === CensusData.jl: A tidycensus-inspired Julia module ===
 # Save as src/data/census_client.jl
+
 module CensusClient
 using HTTP, JSON, DataFrames, CSV
+
 export get_acs, get_decennial, get_pop_estimates, list_variables
+
 const CENSUS_BASE = "https://api.census.gov/data"
+
 """
-get_acs(variables; geography, state, county=nothing,
-year=2022, survey="acs5", api_key=ENV["CENSUS_API_KEY"])
-```
+    get_acs(variables; geography, state, county=nothing,
+            year=2022, survey="acs5", api_key=ENV["CENSUS_API_KEY"])
 
 Fetch ACS estimates analogous to R's tidycensus::get_acs().
-
 geography: "tract", "county", "state", "block group", "zcta"
-
 variables: Vector of ACS variable codes (e.g. ["B01001_001E"])
-
-OR a Dict mapping code => friendly_name
-
+           OR a Dict mapping code => friendly_name
 """
-
-```julia
 function get_acs(variables;
-geography::String,
-state::String,
-county::Union{String,Nothing}=nothing,
-year::Int=2022,
-survey::String="acs5",
-geometry::Bool=true,
-api_key::String=get(ENV,"CENSUS_API_KEY",""))
-var_codes = variables isa Dict ? collect(keys(variables)) : variables
-var_str   = join(["NAME"; var_codes], ",")
-geo_spec = if geography == "tract"
-isnothing(county) ?
-"for=tract:*&in=state:$(state)" :
-"for=tract:*&in=state:$(state)%20county:$(county)"
-elseif geography == "county"
-"for=county:*&in=state:$(state)"
-elseif geography == "zcta"
-"for=zip%20code%20tabulation%20area:*"
-else
-"for=$(replace(geography,' '=>'%20')):*&in=state:$(state)"
+                  geography::String,
+                  state::String,
+                  county::Union{String,Nothing}=nothing,
+                  year::Int=2022,
+                  survey::String="acs5",
+                  geometry::Bool=true,
+                  api_key::String=get(ENV,"CENSUS_API_KEY",""))
+
+    var_codes = variables isa Dict ? collect(keys(variables)) : variables
+    var_str   = join(["NAME"; var_codes], ",")
+
+    geo_spec = if geography == "tract"
+        isnothing(county) ?
+            "for=tract:*&in=state:$(state)" :
+            "for=tract:*&in=state:$(state)%20county:$(county)"
+    elseif geography == "county"
+        "for=county:*&in=state:$(state)"
+    elseif geography == "zcta"
+        "for=zip%20code%20tabulation%20area:*"
+    else
+        "for=$(replace(geography,' '=>'%20')):*&in=state:$(state)"
+    end
+
+    url = "$(CENSUS_BASE)/$(year)/acs/$(survey)" *
+          "?get=$(var_str)&$(geo_spec)" *
+          (isempty(api_key) ? "" : "&key=$(api_key)")
+
+    resp = HTTP.get(url)
+    resp.status == 200 || error("Census API error $(resp.status): $(String(resp.body))")
+
+    raw = JSON.parse(String(resp.body))
+    headers = Symbol.(raw[1])
+    df = DataFrame([Dict(headers[j] => raw[i][j] for j in 1:length(headers))
+                    for i in 2:length(raw)])
+
+    # Build GEOID
+    df.GEOID = if geography == "tract"
+        rpad.(df.state,2,"0") .* rpad.(df.county,3,"0") .* lpad.(df.tract,6,"0")
+    elseif geography == "county"
+        rpad.(df.state,2,"0") .* rpad.(df.county,3,"0")
+    else
+        coalesce.(get.(Ref(df), :"zip code tabulation area", missing), missing)
+    end
+
+    # Rename variables if Dict provided
+    if variables isa Dict
+        for (code, name) in variables
+            sym = Symbol(code)
+            haskey(df, sym) && rename!(df, sym => Symbol(name))
+        end
+    end
+
+    df
 end
-url = "$(CENSUS_BASE)/$(year)/acs/$(survey)" *
-"?get=$(var_str)&$(geo_spec)" *
-(isempty(api_key) ? "" : "&key=$(api_key)")
-resp = HTTP.get(url)
-resp.status == 200 || error("Census API error $(resp.status): $(String(resp.body))")
-raw = JSON.parse(String(resp.body))
-headers = Symbol.(raw[1])
-df = DataFrame([Dict(headers[j] => raw[i][j] for j in 1:length(headers))
-for i in 2:length(raw)])
-# Build GEOID
-df.GEOID = if geography == "tract"
-rpad.(df.state,2,"0") .* rpad.(df.county,3,"0") .* lpad.(df.tract,6,"0")
-elseif geography == "county"
-rpad.(df.state,2,"0") .* rpad.(df.county,3,"0")
-else
-coalesce.(get.(Ref(df), :"zip code tabulation area", missing), missing)
-end
-# Rename variables if Dict provided
-if variables isa Dict
-for (code, name) in variables
-sym = Symbol(code)
-haskey(df, sym) && rename!(df, sym => Symbol(name))
-end
-end
-df
-end
+
 # Convenience wrapper: get uninsurance data by state
 function get_insurance_coverage(state_fips::String; year::Int=2022)
-get_acs(
+    get_acs(
+        Dict("B27001_001E" => "total_pop",
+             "B27010_017E" => "uninsured_19to25",
+             "B27010_033E" => "uninsured_26to34",
+             "B27010_050E" => "uninsured_35to64");
+        geography="tract", state=state_fips, year=year)
+end
+
+end  # module CensusClient
 ```
-
-Dict("B27001_001E" => "total_pop",
-
-"B27010_017E" => "uninsured_19to25",
-
-"B27010_033E" => "uninsured_26to34",
-
-"B27010_050E" => "uninsured_35to64");
-
-geography="tract", state=state_fips, year=year)
 
 
 ### 13.2.3 USDA Economic Research Service Population and Rural Data
-
-```julia
-end
-end  # module CensusClient
-```
 
 The USDA Economic Research Service (ERS) maintains several datasets essential for rural population analysis beyond the RUCA codes already discussed. The ERS Atlas of Rural and Small-Town America provides interactive maps and downloadable county-level data on people, jobs, agriculture, and wellbeing across four thematic areas. The ERS Food Environment Atlas maps food access, food stores, and food assistance programs. The ERS County-level Data Sets provide downloadable data on poverty, education, employment, and rural-urban classification at the county level.
 
@@ -164,6 +163,7 @@ For Julia users, Kontur data can be read via ArchGDAL.jl's GeoPackage support. T
 ```julia
 # === Loading and using Kontur Population Data in Julia ===
 using ArchGDAL, DataFrames, GeoInterface
+
 """
 ```
 
@@ -177,56 +177,45 @@ File format: GeoPackage (.gpkg) with H3 hexagonal grid
 
 ```julia
 function load_kontur(filepath::String; state_filter=nothing)
-```
+    ArchGDAL.read(filepath) do dataset
+        layer = ArchGDAL.getlayer(dataset, 0)
+        n = ArchGDAL.nfeature(layer)
 
-ArchGDAL.read(filepath) do dataset
+        ids, pops, geoms = String[], Float64[], []
+        ArchGDAL.resetreading!(layer)
+        for feat in layer
+            push!(ids,  ArchGDAL.getfield(feat, "h3"))
+            push!(pops, Float64(ArchGDAL.getfield(feat, "population")))
+            push!(geoms, GeoInterface.convert(
+                ArchGDAL.IGeometry,
+                ArchGDAL.getgeom(feat)))
+        end
 
-layer = ArchGDAL.getlayer(dataset, 0)
-
-n = ArchGDAL.nfeature(layer)
-
-ids, pops, geoms = String[], Float64[], []
-
-ArchGDAL.resetreading!(layer)
-
-for feat in layer
-
-push!(ids,  ArchGDAL.getfield(feat, "h3"))
-
-push!(pops, Float64(ArchGDAL.getfield(feat, "population")))
-
-push!(geoms, GeoInterface.convert(
-
-ArchGDAL.IGeometry,
-
-ArchGDAL.getgeom(feat)))
-
-
-### 13.3.5 High Resolution Settlement Layer (HRSL) / Meta AI
-
-```julia
+        df = DataFrame(h3_id=ids, population=pops, geometry=geoms)
+        return df
+    end
 end
-df = DataFrame(h3_id=ids, population=pops, geometry=geoms)
-return df
-end
-end
+
 # === H3 Spatial Aggregation (requires H3.jl or manual calculation) ===
 # Aggregate Kontur hex cells to county level via spatial join
 function aggregate_kontur_to_counties(kontur_df, county_geoms, county_ids)
-# For each Kontur hex, find containing county
-county_pop = Dict(id => 0.0 for id in county_ids)
-for row in eachrow(kontur_df)
-centroid = GeoInterface.centroid(row.geometry)
-for (cid, cgeom) in zip(county_ids, county_geoms)
-if GeoInterface.contains(cgeom, centroid)
-county_pop[cid] += row.population
-break
-end
-end
-end
-return county_pop
+    # For each Kontur hex, find containing county
+    county_pop = Dict(id => 0.0 for id in county_ids)
+    for row in eachrow(kontur_df)
+        centroid = GeoInterface.centroid(row.geometry)
+        for (cid, cgeom) in zip(county_ids, county_geoms)
+            if GeoInterface.contains(cgeom, centroid)
+                county_pop[cid] += row.population
+                break
+            end
+        end
+    end
+    return county_pop
 end
 ```
+
+
+### 13.3.5 High Resolution Settlement Layer (HRSL) / Meta AI
 
 The High Resolution Settlement Layer (HRSL), developed by Meta (Facebook) AI Research and CIESIN, uses deep learning applied to DigitalGlobe satellite imagery to identify building footprints globally at 1-meter resolution, then distributes census population counts to those footprints. The original HRSL covered approximately 140 countries. Meta has continued to release improved versions as part of its broader AI for Good initiatives.
 
@@ -257,101 +246,91 @@ The County-Level BRFSS Estimates project, published periodically by the CDC, pro
 
 ```julia
 # === PopulationData.jl: Unified population data access module for Julia ===
+
 module PopulationData
 using HTTP, JSON, CSV, DataFrames, Rasters, GeoDataFrames
+
 export download_worldpop, download_ghsl, download_landscan,
-download_kontur, load_population_raster, pop_by_polygon
+       download_kontur, load_population_raster, pop_by_polygon
+
 const DATA_DIR = joinpath(homedir(), ".julia_geodata", "population")
+
 """
-download_worldpop(country_iso3, year; resolution="1km")
-```
+    download_worldpop(country_iso3, year; resolution="1km")
 
 Download WorldPop constrained population raster.
-
 country_iso3: e.g. "USA", "MEX"
-
 year: 2015-2020 (historical) or 2021-2030 (projected)
-
 resolution: "1km" or "100m" (100m only available for 2020)
-
 """
-
-```julia
 function download_worldpop(country_iso3::String, year::Int;
-resolution::String="1km")
-iso_lower = lowercase(country_iso3)
-base = "https://data.worldpop.org/GIS/Population/Global_2000_2020"
-filename = "$(iso_lower)_ppp_$(year)_$(resolution)_Aggregated_UNadj.tif"
-url = "$(base)/$(year)/$(uppercase(country_iso3))/$(filename)"
-dest = joinpath(DATA_DIR, "worldpop", filename)
-mkpath(dirname(dest))
-isfile(dest) && return dest
-@info "Downloading WorldPop $(country_iso3) $(year) ($(resolution))..."
-resp = HTTP.get(url; readtimeout=600, progress=true)
-write(dest, resp.body)
-@info "Saved to $(dest)"
-return dest
+                             resolution::String="1km")
+    iso_lower = lowercase(country_iso3)
+    base = "https://data.worldpop.org/GIS/Population/Global_2000_2020"
+    filename = "$(iso_lower)_ppp_$(year)_$(resolution)_Aggregated_UNadj.tif"
+    url = "$(base)/$(year)/$(uppercase(country_iso3))/$(filename)"
+
+    dest = joinpath(DATA_DIR, "worldpop", filename)
+    mkpath(dirname(dest))
+    isfile(dest) && return dest
+
+    @info "Downloading WorldPop $(country_iso3) $(year) ($(resolution))..."
+    resp = HTTP.get(url; readtimeout=600, progress=true)
+    write(dest, resp.body)
+    @info "Saved to $(dest)"
+    return dest
 end
+
 """
-download_ghsl(year; resolution=100)
-```
+    download_ghsl(year; resolution=100)
 
 Download Global Human Settlement Layer population raster (GHS-POP R2023A).
-
 year: 1975, 1980, 1985, 1990, 1995, 2000, 2005, 2010, 2015, 2020, 2025, 2030
-
 resolution: 100 (meters), 1000
-
 Note: GHSL files require registration at ghsl.jrc.ec.europa.eu
-
 """
-
-```julia
 function download_ghsl(year::Int; resolution::Int=100)
-res_str = resolution == 100 ? "R2023A_4326_100" : "R2023A_4326_1000"
-base = "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL"
-filename = "GHS_POP_E$(year)_GLOBE_$(res_str)_V1_0.tif"
-url = "$(base)/GHS_POP_GLOBE_R2023A/GHS_POP_E$(year)_GLOBE_$(res_str)_V1_0/V1-0/$(filename)"
-dest = joinpath(DATA_DIR, "ghsl", filename)
-mkpath(dirname(dest))
-isfile(dest) && return dest
-@info "Downloading GHSL $(year) $(resolution)m — file may be large (>1 GB)"
-resp = HTTP.get(url; readtimeout=1800)
-write(dest, resp.body)
-return dest
+    res_str = resolution == 100 ? "R2023A_4326_100" : "R2023A_4326_1000"
+    base = "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL"
+    filename = "GHS_POP_E$(year)_GLOBE_$(res_str)_V1_0.tif"
+    url = "$(base)/GHS_POP_GLOBE_R2023A/GHS_POP_E$(year)_GLOBE_$(res_str)_V1_0/V1-0/$(filename)"
+
+    dest = joinpath(DATA_DIR, "ghsl", filename)
+    mkpath(dirname(dest))
+    isfile(dest) && return dest
+
+    @info "Downloading GHSL $(year) $(resolution)m — file may be large (>1 GB)"
+    resp = HTTP.get(url; readtimeout=1800)
+    write(dest, resp.body)
+    return dest
 end
+
 """
-pop_by_polygon(raster_path, polygons_df; stat=sum)
-```
+    pop_by_polygon(raster_path, polygons_df; stat=sum)
 
 Zonal statistics: compute population total within each polygon.
-
 Uses Rasters.jl zonal function with mask approach.
-
 polygons_df must have a :geometry column.
-
 Returns Vector{Float64} with one value per polygon.
-
 """
+function pop_by_polygon(raster_path::String, polygons_df::DataFrame;
+                          stat::Function = sum)
+    rast = Raster(raster_path; missingval=-9999.0f0)
+    results = Float64[]
+    for row in eachrow(polygons_df)
+        try
+            masked = Rasters.mask(rast; with=row.geometry)
+            vals = filter(!ismissing, vec(masked))
+            push!(results, isempty(vals) ? 0.0 : stat(Float64.(vals)))
+        catch
+            push!(results, 0.0)
+        end
+    end
+    return results
+end
+
+end  # module PopulationData
+```
 
 
 ## 13.6 Comparing Population Data Sources for Rural Health Applications
-
-```julia
-function pop_by_polygon(raster_path::String, polygons_df::DataFrame;
-stat::Function = sum)
-rast = Raster(raster_path; missingval=-9999.0f0)
-results = Float64[]
-for row in eachrow(polygons_df)
-try
-masked = Rasters.mask(rast; with=row.geometry)
-vals = filter(!ismissing, vec(masked))
-push!(results, isempty(vals) ? 0.0 : stat(Float64.(vals)))
-catch
-push!(results, 0.0)
-end
-end
-return results
-end
-end  # module PopulationData
-```
