@@ -1,0 +1,228 @@
+---
+title: "Chapter 8: Complete Julia Programming Guide for Healthcare GIS"
+subtitle: "Volume 1 — Geographic Analysis in Julia: Healthcare and Rural Populations"
+---
+
+
+## 8.1 Project Structure for Healthcare GIS in Julia
+
+A well-organized Julia project for healthcare GIS analysis should separate concerns into distinct layers: data acquisition, data processing and cleaning, spatial analysis, statistical modeling, and visualization. The following project structure is recommended as a starting template.
+
+healthcare_geo/
+
+├── Project.toml          # Package dependencies
+
+├── Manifest.toml         # Exact dependency versions (auto-generated)
+
+├── README.md             # Project documentation
+
+├── src/
+
+│   ├── HealthcareGeo.jl  # Main module file
+
+│   ├── data/
+
+│   │   ├── download.jl   # Data acquisition functions
+
+│   │   ├── clean.jl      # Data cleaning/transformation
+
+│   │   └── classify.jl   # Rural classification logic
+
+│   ├── analysis/
+
+│   │   ├── morans.jl     # Spatial autocorrelation
+
+│   │   ├── accessibility.jl  # 2SFCA and variations
+
+│   │   ├── gwr.jl        # Geographically weighted regression
+
+│   │   └── clusters.jl   # LISA cluster analysis
+
+│   └── viz/
+
+│       ├── choropleth.jl # Choropleth mapping
+
+│       ├── accessibility_map.jl
+
+│       └── dashboard.jl  # Interactive dashboard
+
+├── data/
+
+│   ├── raw/              # Downloaded, unmodified source data
+
+│   ├── processed/        # Cleaned, joined datasets
+
+│   └── outputs/          # Analysis results, maps
+
+├── notebooks/            # Pluto/Jupyter notebooks for exploration
+
+└── test/
+
+└── runtests.jl       # Unit and integration tests
+
+
+## 8.2 Complete Spatial Analysis Pipeline
+
+The following code implements a complete end-to-end spatial analysis pipeline for studying primary care access in rural counties. It demonstrates data loading, spatial join, accessibility calculation, Moran's I analysis, and choropleth map generation.
+
+```julia
+# === HealthcareGeo.jl: Main Module ===
+module HealthcareGeo
+using DataFrames, CSV, Statistics, LinearAlgebra
+using Shapefile, ArchGDAL, GeoDataFrames, GeoInterface
+using GeoMakie, CairoMakie
+using HTTP, JSON
+export load_counties, load_providers, build_weights_matrix,
+compute_morans_i, two_step_fca, lisa_clusters,
+make_choropleth_map
+include("data/download.jl")
+include("data/classify.jl")
+include("analysis/morans.jl")
+include("analysis/accessibility.jl")
+include("viz/choropleth.jl")
+end  # module
+# === analysis/accessibility.jl ===
+"""
+```
+
+Build a spatial weights matrix from county geometries.
+
+Uses queen contiguity: two polygons are neighbors if they share any boundary.
+
+Returns a row-standardized matrix.
+
+"""
+
+```julia
+function build_queen_weights(geoms::Vector)::Matrix{Float64}
+n = length(geoms)
+```
+
+W = zeros(Float64, n, n)
+
+for i in 1:n
+
+for j in (i+1):n
+
+if GeoInterface.intersects(geoms[i], geoms[j])
+
+W[i,j] = 1.0
+
+W[j,i] = 1.0
+
+```julia
+end
+end
+end
+# Row-standardize
+row_sums = sum(W; dims=2)
+for i in 1:n
+if row_sums[i] > 0
+```
+
+W[i,:] ./= row_sums[i]
+
+```julia
+end
+end
+return W
+end
+"""
+```
+
+Compute LISA cluster categories for each spatial unit.
+
+Returns Vector{String} with values: "HH", "LL", "HL", "LH", "NS"
+
+"""
+
+```julia
+function lisa_clusters(values::Vector{Float64}, W::Matrix{Float64};
+permutations::Int = 999,
+significance::Float64 = 0.05)::Vector{String}
+n = length(values)
+x_bar = mean(values)
+z = values .- x_bar
+s2 = sum(z.^2) / n
+# Local Moran's I for each location
+```
+
+Wz = W * z
+
+I_local = (z ./ s2) .* Wz
+
+
+## 8.3 Integrating OpenStreetMap for Network Analysis
+
+```julia
+# Permutation test for each location
+p_values = ones(Float64, n)
+for i in 1:n
+perm_I = Vector{Float64}(undef, permutations)
+perm_z = copy(z)
+for k in 1:permutations
+shuffle!(perm_z)
+perm_I[k] = (z[i] / s2) * dot(W[i,:], perm_z)
+end
+p_values[i] = mean(abs.(perm_I) .>= abs(I_local[i]))
+end
+# Classify: only report significant clusters
+result = fill("NS", n)
+for i in 1:n
+if p_values[i] < significance
+hi_val = values[i] >= x_bar
+# Spatial lag sign
+lag_hi = dot(W[i,:], values) >= x_bar
+result[i] = if hi_val && lag_hi; "HH"
+elseif !hi_val && !lag_hi; "LL"
+elseif hi_val && !lag_hi; "HL"
+else "LH" end
+end
+end
+return result
+end
+```
+
+Accurate travel time analysis requires road network data. OpenStreetMapX.jl provides Julia-native functionality for working with OpenStreetMap (OSM) data, including parsing PBF/OSM files, building routing graphs, and computing shortest paths. For large-scale analysis, the OSRM HTTP API provides fast routing calculations that can be batched for accessibility analysis at scale.
+
+```julia
+using OpenStreetMapX, HTTP, JSON
+"""
+```
+
+Batch travel time calculation via OSRM public API.
+
+origins:      Vector of (lat, lon) tuples for population centroids
+
+destinations: Vector of (lat, lon) tuples for provider locations
+
+Returns Matrix{Float64} of travel times in minutes (n_origins × n_dest)
+
+"""
+
+```julia
+function osrm_travel_times(origins::Vector{NTuple{2,Float64}},
+destinations::Vector{NTuple{2,Float64}})::Matrix{Float64}
+# OSRM table service: computes all-pairs travel times
+# Note: public API has rate limits; use self-hosted OSRM for production
+base_url = "http://router.project-osrm.org/table/v1/driving/"
+# Build coordinate string: lon,lat;lon,lat;...
+all_coords = vcat(origins, destinations)
+coord_str = join(["$(lon),$(lat)" for (lat,lon) in all_coords], ";")
+src_str = join(0:(length(origins)-1), ";")
+dst_str = join(length(origins):(length(all_coords)-1), ";")
+url = base_url * coord_str * "?sources=$(src_str)&destinations=$(dst_str)"
+resp = HTTP.get(url)
+data = JSON.parse(String(resp.body))
+# Convert seconds to minutes, replace nothing with Inf
+times = data["durations"]
+n_orig = length(origins)
+n_dest = length(destinations)
+result = Matrix{Float64}(undef, n_orig, n_dest)
+for i in 1:n_orig, j in 1:n_dest
+t = times[i][j]
+result[i,j] = isnothing(t) ? Inf : t / 60.0
+end
+return result
+end
+```

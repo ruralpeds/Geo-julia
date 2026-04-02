@@ -1,0 +1,644 @@
+---
+title: "Chapter 22: Claude Code Programs — Complete Build Specifications"
+subtitle: "Volume 3 — Package Engineering: Building the Missing Ecosystem"
+---
+
+This chapter contains the complete, production-ready Claude Code specifications for each missing package. These are not outlines — they are complete program descriptions that Claude Code (the claude CLI) will execute to generate working package code. Each specification is self-contained and can be run independently.
+
+
+## 22.1 Master Claude Code Program: Bootstrap All Six Packages
+
+```julia
+# MASTER BOOTSTRAP PROGRAM
+# File: bootstrap_geo_packages.md
+# Run: claude bootstrap_geo_packages.md
+# Prerequisite: Julia 1.10+, git, GitHub account configured
+## Objective
+```
+
+Create a local Julia package workspace containing six new packages that
+
+fill the gaps identified in the Julia geospatial ecosystem analysis.
+
+Each package must be independently tested and ready for General registry submission.
+
+## Packages to Create
+
+1. SpatialStats.jl    — Spatial weights, Moran's I, LISA, G*, spatial regression
+
+2. Geocode.jl         — Address geocoding (Census, Nominatim, Google backends)
+
+3. MapClassify.jl     — Choropleth classification (15 schemes)
+
+4. SpatialReg.jl      — Spatial lag/error/Durbin models via ML estimation
+
+5. PointPatterns.jl   — Point pattern analysis (K fn, G fn, intensity estimation)
+
+6. Overpass.jl        — OpenStreetMap Overpass API client
+
+## Workspace Setup
+
+Create directory ~/dev/julia_geo_packages/ as the root workspace.
+
+Create a Workspace.toml at the root listing all six packages.
+
+Each package lives in its own subdirectory: SpatialStats/, Geocode.jl/, etc.
+
+## Execution Order
+
+Run the following Claude Code specs in order:
+
+1. specs/pkg01_spatialstats.md
+
+2. specs/pkg02_geocode.md
+
+3. specs/pkg03_mapclassify.md
+
+4. specs/pkg04_spatialreg.md
+
+5. specs/pkg05_pointpatterns.md
+
+6. specs/pkg06_overpass.md
+
+## Validation
+
+After all specs run, execute:
+
+julia --project=. test/integration_test.jl
+
+All six packages must load without error.
+
+All individual test suites must pass.
+
+
+## 22.2 SpatialStats.jl Complete Claude Code Specification
+
+```julia
+# CLAUDE CODE SPEC: SpatialStats.jl
+# File: specs/pkg01_spatialstats.md
+## Objective
+```
+
+Build SpatialStats.jl — a comprehensive spatial statistics package for Julia.
+
+This is the most critical gap package: no equivalent exists in Julia.
+
+The Python PySAL esda module and R spdep package are the reference implementations.
+
+## Step 1: Generate Package Scaffold
+
+Execute the following Julia code to create the package structure:
+
+```julia
+
+```julia
+using PkgTemplates
+tpl = Template(
+user="GITHUB_USERNAME",  # Replace with actual GitHub username
+dir="~/dev/julia_geo_packages",
+julia=v"1.9",
+plugins=[
+```
+
+License(name="MIT"),
+
+Git(manifest=false, ssh=true),
+
+GitHubActions(osx=true, linux=true, windows=true, coverage=true,
+
+julia_version=["1.9","1.10","nightly"]),
+
+Codecov(),
+
+Documenter{GitHubActions}(),
+
+CompatHelper(),
+
+TagBot(),
+
+],
+
+)
+
+tpl("SpatialStats")
+
+```
+
+## Step 2: Project.toml Configuration
+
+Set version = "0.1.0"
+
+Add dependencies:
+
+DataFrames, GeoInterface, NearestNeighbors, Distributions, Optim
+
+(all stdlib: LinearAlgebra, SparseArrays, Statistics, Random)
+
+Set [compat]: julia = "1.9", DataFrames = "1", GeoInterface = "1"
+
+NearestNeighbors = "0.4", Distributions = "0.25", Optim = "1"
+
+## Step 3: Create Source Directory Structure
+
+Create the following files in src/:
+
+### src/SpatialStats.jl (main module)
+
+Implement exactly as shown in Chapter 16.3.1 of the textbook.
+
+Include all 13 source files listed in the module.
+
+### src/types/weights.jl
+
+Implement: AbstractSpatialWeights, WeightStyle subtypes (Binary, RowStd, GlobalStd),
+
+WeightTransform subtypes (Queen, Rook, KNN, DistBand),
+
+SpatialWeights{S,T} struct with full interface implementation.
+
+Implement Base.show for pretty printing.
+
+Add lag_spatial(w, x) = w.W * x  (spatial lag operator)
+
+### src/types/results.jl
+
+Implement all result structs as NamedTuples for zero-cost abstraction:
+
+MoranResult, LISAResult, SpatialRegResult, GStatResult
+
+Each must implement Base.show with formatted statistical output.
+
+### src/weights/queen.jl
+
+Implement: queen_weights(geometries; transform=RowStd())
+
+Use bounding-box pre-filtering + GeoInterface.intersects() for adjacency.
+
+Internal helpers: _compute_bboxes, _bbox_candidates, _normalize
+
+CRITICAL: Use SparseMatrixCSC throughout. Never build a dense n×n matrix.
+
+Test: queen_weights on 5×5 regular grid should give mean_neighbors ≈ 3.5
+
+### src/weights/knn.jl
+
+Implement: knn_weights(coords, k; transform, metric)
+
+Use NearestNeighbors.KDTree with Haversine metric.
+
+Input: n×2 matrix [lat lon] in decimal degrees.
+
+CRITICAL: NearestNeighbors wants 2×n (transposed) input.
+
+### src/weights/distance.jl
+
+Implement:
+
+distance_band_weights(coords, threshold_km; transform=RowStd())
+
+inverse_distance_weights(coords; power=1.0, transform=RowStd())
+
+Both use haversine distance. inverse_distance sets diagonal to 0.
+
+### src/autocorr/global.jl
+
+Implement moran() with both :permutation and :analytical methods.
+
+Val() dispatch pattern as shown in Chapter 18.1.
+
+Also implement: geary() (Geary's C), getis_ord_g() (Getis-Ord G global)
+
+### src/autocorr/local.jl
+
+Implement moran_local() (LISA) as shown in Chapter 18.2.
+
+Also implement local_g() (Getis-Ord G* local statistic).
+
+local_g should return z-scores per location (positive = hot spot, negative = cold).
+
+### src/regression/ols.jl
+
+Implement lm_spatial(y, X, w) — OLS with spatial diagnostics.
+
+Returns OLS coefficients + Lagrange Multiplier tests:
+
+LM-lag (test for omitted spatial lag)
+
+LM-error (test for spatial error autocorrelation)
+
+Robust LM-lag, Robust LM-error (Anselin 1996 robust versions)
+
+### src/regression/slm.jl
+
+Implement slm(y, X, w) as shown in Chapter 20.1.2.
+
+Requires: src/regression/logdet.jl (SpatialLogDet struct, log_det_filter)
+
+### src/regression/sem.jl
+
+Implement sem(y, X, w) — Spatial Error Model.
+
+Model: y = Xβ + u, u = λWu + ε
+
+Use GMM (Kelejian-Prucha) estimator — simpler than ML for SEM.
+
+GMM step 1: OLS residuals e = y - Xβ_OLS
+
+GMM step 2: Estimate λ by minimizing ||e - λWe||²
+
+GMM step 3: GLS using (I - λW) as the transform
+
+### src/regression/gwr.jl
+
+Implement gwr(y, X, coords; bandwidth_km, kernel, fixed) — Geographically Weighted Reg.
+
+kernel options: :bisquare (default), :gaussian, :tricube
+
+fixed=true: fixed bandwidth in km; fixed=false: adaptive k-nearest bandwidth
+
+Returns DataFrame with n rows: one row per location, columns for each beta coefficient
+
+plus local R², local residuals, and hat matrix diagonal.
+
+### src/classify/mapclassify.jl
+
+Implement choropleth_classify(values, scheme; k=5) for these schemes:
+
+:equal_interval, :quantile, :natural_breaks (Jenks), :std_deviation,
+
+:max_breaks, :head_tail (Jiang 2013), :percentiles, :boxplot
+
+Returns: breaks::Vector{Float64} (k+1 values defining k class boundaries)
+
+## Step 4: Test Suite
+
+Create test/runtests.jl as shown in Chapter 21.1.
+
+Create test/test_weights.jl: test queen on 3×3, 4×4, 5×5 grids
+
+Create test/test_morans.jl: perfect clustering, checkerboard, random, constant
+
+Create test/test_lisa.jl: known HH/LL clusters on synthetic data
+
+Create test/test_regression.jl: OLS LM tests, SLM rho=0 reduces to OLS
+
+Create test/test_typestability.jl: @inferred for all public functions
+
+## Step 5: Documentation
+
+Implement docs/make.jl as shown in Chapter 21.2.
+
+Create docs/src/index.md with package overview and quick start example.
+
+Create docs/src/guide/quickstart.md with full end-to-end example using
+
+North Dakota county data (synthetic) showing weights → Moran → LISA → map.
+
+## Validation Tests
+
+Run these after implementation and confirm all pass:
+
+```julia
+
+
+## 22.3 Geocode.jl Complete Claude Code Specification
+
+```julia
+using SpatialStats, SparseArrays, LinearAlgebra
+# Test 1: 5x5 grid queen weights
+geoms = _make_grid_polygons(5, 5)
+w = queen_weights(geoms)
+@assert w.n == 25
+@assert 3.0 < w.mean_neighbors < 4.0
+@assert all(isapprox.(vec(sum(w.W; dims=2)), 1.0; atol=1e-10)
+| vec(sum(w.W; dims=2)) .== 0.0)
+# Test 2: Moran's I on clustered data
+vals = [ones(12); zeros(13)]
+result = moran(vals, w; method=:analytical)
+@assert result.I > 0.3
+# Test 3: Type inference
+@assert @inferred(moran(randn(25), w)) isa MoranResult
+@assert @inferred(moran_local(randn(25), w)) isa LISAResult
+println(\"All SpatialStats.jl validation tests passed.\")
+```
+# CLAUDE CODE SPEC: Geocode.jl
+# File: specs/pkg02_geocode.md
+## Objective
+```
+
+Build Geocode.jl — the first geocoding library for Julia.
+
+Fills critical gap: Julia currently has zero geocoding packages.
+
+Reference implementations: Python's geopy, R's tidygeocoder.
+
+## Package Structure
+
+Geocode.jl/
+
+src/
+
+Geocode.jl           # Module + exports
+
+backends/
+
+census.jl          # U.S. Census Bureau Geocoder
+
+nominatim.jl       # OpenStreetMap Nominatim
+
+google.jl          # Google Maps Geocoding API (requires key)
+
+arcgis.jl          # ArcGIS World Geocoding Service
+
+batch.jl             # Chunked batch geocoding
+
+normalize.jl         # Address standardization
+
+results.jl           # GeocodedAddress type
+
+## Core Implementation Requirements
+
+### CensusGeocoder backend
+
+Implement geocode_batch(g::CensusGeocoder, df) exactly as in Chapter 19.1.1.
+
+Endpoint: POST https://geocoding.geo.census.gov/geocoder/geographies/addressbatch
+
+Output columns: id, lat, lon, match_type, matched_address, tract_fips, source
+
+### NominatimGeocoder backend
+
+Implement geocode(g::NominatimGeocoder, address::String) for single-address geocoding.
+
+Endpoint: GET https://nominatim.openstreetmap.org/search?q={address}&format=jsonv2
+
+REQUIRED: Pass User-Agent header (Nominatim usage policy requirement).
+
+Rate limit: 1 second between requests (enforce with sleep(1.0)).
+
+Return GeocodedAddress with lat/lon from first result.
+
+### Batch geocoding pipeline
+
+Implement geocode_all(g, addresses; batch_size, sleep_sec, verbose) as in Chapter 19.1.2.
+
+Must handle: empty DataFrames, single-row DataFrames, exact batch size multiples.
+
+Must log progress: 'Batch 3/12 (500 records)... 487/500 matched (2.3s)'
+
+### Address normalization
+
+Implement normalize_address(addr::String) as in Chapter 19.1.2.
+
+Also implement:
+
+is_po_box(addr) → Bool  (detect P.O. Box addresses that won't geocode)
+
+is_rural_route(addr) → Bool  (detect RR/HC addresses)
+
+standardize_state(state::String) → String  (full name to 2-letter abbreviation)
+
+## Dependencies
+
+HTTP, JSON, CSV, DataFrames, URIs
+
+No geocoding-specific external libraries needed.
+
+## Testing
+
+test/test_census.jl: geocode 5 known U.S. addresses; verify lat/lon within 0.01°
+
+test/test_nominatim.jl: geocode 3 known international addresses
+
+test/test_normalize.jl: verify abbreviation expansion, PO Box detection
+
+test/test_batch.jl: geocode 2,500 synthetic addresses using chunking; verify result count
+
+## Validation Test
+
+```julia
+
+
+## 22.4 MapClassify.jl Complete Claude Code Specification
+
+```julia
+using Geocode
+g = CensusGeocoder()
+test_addr = DataFrame(
+id=[1,2,3],
+street=["450 5th Ave","1600 Pennsylvania Ave","123 Main St"],
+city=["New York","Washington","BOGUS_CITY"],
+state=["NY","DC","ZZ"],
+zip=["10018","20500","00000"]
+)
+results = geocode_batch(g, test_addr)
+@assert !ismissing(results[1,:lat])
+@assert !ismissing(results[2,:lat])
+@assert results[3,:match_type] == :no_match
+println(\"Geocode.jl validation passed.\")
+```
+# CLAUDE CODE SPEC: MapClassify.jl
+# File: specs/pkg03_mapclassify.md
+## Objective
+```
+
+Build MapClassify.jl — choropleth map classification schemes.
+
+Julia equivalent of Python's mapclassify and R's classInt packages.
+
+15 classification schemes required for General registry quality.
+
+## All Classification Schemes to Implement
+
+### Equal Interval
+
+Divides the range [min, max] into k equal-width intervals.
+
+classify(values, EqualInterval(k))
+
+breaks = range(minimum(values), maximum(values); length=k+1)
+
+### Quantile
+
+Each class contains the same number of observations (approximately).
+
+Use Statistics.quantile() with k+1 evenly spaced quantile probabilities.
+
+### Natural Breaks (Fisher-Jenks)
+
+Minimizes within-class variance. O(n*k) dynamic programming algorithm.
+
+This is the most computationally complex scheme — implement the
+
+Jenks-Caspall simplification using the dynamic programming approach from
+
+Fisher (1958). The algorithm populates two n×k matrices:
+
+- error_matrix[i,j] = within-class variance for class ending at value i with j classes
+
+- membership_matrix[i,j] = optimal break point for class j ending at i
+
+Final breaks are recovered by backtracking through membership_matrix.
+
+### Standard Deviation
+
+Breaks at mean ± k*sd for k = 0.5, 1, 1.5, 2 SD
+
+### Head-Tail (Jiang 2013)
+
+Iterative: compute mean; split at mean; repeat on head (above-mean) values.
+
+Natural for right-skewed distributions like population density.
+
+### Box Plot
+
+Breaks at: Q1-1.5*IQR, Q1, median, Q3, Q3+1.5*IQR (outlier fences)
+
+### Maximum Breaks
+
+Find k-1 largest gaps between sorted adjacent values; place breaks there.
+
+## Type Design
+
+```julia
+abstract type AbstractClassifier end
+struct EqualInterval <: AbstractClassifier; k::Int; end
+struct Quantile <: AbstractClassifier; k::Int; end
+struct NaturalBreaks <: AbstractClassifier; k::Int; end
+struct StdDeviation <: AbstractClassifier; k::Int; end
+struct HeadTail <: AbstractClassifier; end  # k determined by data
+struct BoxPlot <: AbstractClassifier; end
+struct MaxBreaks <: AbstractClassifier; k::Int; end
+# Dispatch on classifier type — no runtime branching
+classify(values, c::EqualInterval) = _equal_interval(sort(Float64.(values)), c.k)
+classify(values, c::Quantile) = _quantile(sort(Float64.(values)), c.k)
+# etc.
+## Result Type
+struct ClassificationResult
+bins        :: Vector{Float64}   # k+1 break points (inclusive on right)
+counts      :: Vector{Int}       # observations per class
+assignments :: Vector{Int}       # class assignment for each observation (1..k)
+classifier  :: AbstractClassifier
+end
+## Additional Functions
+assign_class(result, new_value) → Int  (assign a new value to a class)
+compare_classifiers(values, k) → DataFrame  (compare all schemes)
+## Testing
+```
+
+For each scheme: verify sum(counts) == n, breaks is sorted, k classes produced.
+
+Natural Breaks: compare to known results from mapclassify Python package.
+
+Head-Tail: verify on lognormal distribution (should produce ~4 classes).
+
+
+## 22.5 Overpass.jl Complete Claude Code Specification
+
+```julia
+# CLAUDE CODE SPEC: Overpass.jl
+# File: specs/pkg06_overpass.md
+## Objective
+```
+
+Build Overpass.jl — an OpenStreetMap Overpass API client for Julia.
+
+Julia equivalent of Python's overpy / osmnx.graph_from_bbox().
+
+Enables: downloading road networks, POIs, hospitals, pharmacies from OSM.
+
+## Core Features
+
+### OverpassQuery builder
+
+A fluent interface for constructing Overpass QL queries without
+
+learning the full Overpass query language syntax.
+
+query = OverpassQuery()
+
+|> within_bbox(45.0, -104.0, 49.0, -96.5)  # North Dakota
+
+|> ways_with_tag("highway", ["primary","secondary","tertiary","residential"])
+
+|> recurse_down()          # Include all nodes of matched ways
+
+|> output(:json)           # or :xml
+
+### execute(query) → OsmData
+
+POSTs query to https://overpass-api.de/api/interpreter.
+
+Handles timeout (300s default), retry on HTTP 429 (Too Many Requests).
+
+Returns OsmData struct containing nodes, ways, relations.
+
+### Road network download
+
+download_road_network(bbox; transport=:drive) → OpenStreetMapX-compatible data
+
+transport options: :drive (motorway through residential),
+
+:walk (all non-motorway),
+
+:all
+
+Returns raw OSM XML string saveable as .osm file for OpenStreetMapX.jl.
+
+### Healthcare POI download
+
+download_healthcare_pois(bbox) → DataFrame
+
+Queries all OSM nodes/ways with amenity=hospital, amenity=clinic,
+
+amenity=pharmacy, healthcare=*, etc.
+
+Returns DataFrame: name, amenity_type, lat, lon, osm_id, tags::Dict
+
+### Rate limiting and caching
+
+Implement automatic rate limiting: track last request time, enforce 1s gap.
+
+Implement file-based cache: queries cached by hash in ~/.julia/overpass_cache/
+
+Cache TTL: 24 hours by default (configurable).
+
+## OsmData Type
+
+```julia
+struct OsmData
+nodes    :: Dict{Int64, NamedTuple{(:lat,:lon,:tags),Tuple{Float64,Float64,Dict}}}
+ways     :: Dict{Int64, NamedTuple{(:node_ids,:tags),Tuple{Vector{Int64},Dict}}}
+relations :: Dict{Int64, Any}
+metadata :: NamedTuple
+end
+## Dependencies
+```
+
+HTTP, JSON, SHA (for cache key hashing), Dates
+
+## Testing
+
+test_query_builder.jl: verify generated Overpass QL is syntactically correct
+
+test_execute.jl: execute a small bbox query; verify nodes returned
+
+test_healthcare.jl: download healthcare POIs for a small bbox; verify lat/lon
+
+test_cache.jl: execute same query twice; verify second uses cache
+
+## Validation
+
+```julia
+
+```julia
+using Overpass
+# Bismarck, ND bounding box
+bbox = (46.7, -100.9, 46.9, -100.7)
+hospitals = download_healthcare_pois(bbox)
+@assert nrow(hospitals) > 0
+@assert :lat in propertynames(hospitals)
+@assert :lon in propertynames(hospitals)
+println(\"Found $(nrow(hospitals)) healthcare facilities near Bismarck, ND\")
+```
+```

@@ -1,0 +1,248 @@
+---
+title: "Chapter 17: Building Spatial Weights — The Foundation of Every Spatial Analysis"
+subtitle: "Volume 3 — Package Engineering: Building the Missing Ecosystem"
+---
+
+
+## 17.1 Architecture of the Spatial Weights Module
+
+The spatial weights module is the foundation on which all spatial statistics rest. Its correctness and performance dominate the performance of every downstream computation. A poorly designed weights constructor that is O(n²) in time and memory will bottleneck analyses with more than a few hundred spatial units. A correctly designed sparse implementation using SparseMatrixCSC handles the full 73,000 U.S. census tracts without difficulty.
+
+The central computational challenge is the construction of the contiguity graph from polygon geometries. For queen contiguity, two polygons are neighbors if they share any boundary point (including corners). For rook contiguity, they must share a boundary edge of positive length. Both require testing spatial relationships between all pairs of polygons — a naive O(n²) algorithm that calls GeoInterface.intersects() for every pair becomes unbearable for n > 5,000.
+
+
+### 17.1.1 Efficient Contiguity Computation Using Spatial Indexing
+
+The key optimization is using a spatial index (R-tree or bounding-box pre-filter) to reduce the number of expensive intersection tests. For each polygon, we first identify candidate neighbors by bounding box overlap (cheap), then test only candidates for actual intersection (expensive). This reduces the average number of full intersection tests from O(n) to O(k) per polygon, where k is the average number of polygons whose bounding boxes overlap.
+
+```julia
+# === src/weights/queen.jl ===
+# Production implementation with spatial indexing
+using SparseArrays, GeoInterface, LinearAlgebra
+"""
+queen_weights(geometries; transform=RowStd())
+```
+
+Build queen contiguity spatial weights from a vector of geometries.
+
+Uses bounding-box pre-filtering + GEOS intersection for efficiency.
+
+Runs in O(n·k) expected time where k = mean neighbors.
+
+```julia
+# Arguments
+- `geometries`: Any `AbstractVector` of GeoInterface-compatible geometries
+- `transform`:  Weight normalization (`RowStd()`, `Binary()`, `GlobalStd()`)
+# Returns
+`SpatialWeights{typeof(transform), Queen}`
+# Example
+```julia
+using GeoDataFrames, SpatialStats
+counties = GeoDataFrames.read(\"counties.shp\")
+w = queen_weights(counties.geometry)
+```
+"""
+function queen_weights(
+geometries::AbstractVector;
+transform::WeightStyle = RowStd()
+)
+n = length(geometries)
+n < 2 && throw(ArgumentError("Need at least 2 geometries"))
+# ── Step 1: Build bounding boxes for all geometries ──────
+bboxes = _compute_bboxes(geometries)
+# ── Step 2: Build bounding-box spatial index (sort-tile-recursive) ──
+# Simple approach: for each polygon, find candidates by bbox overlap
+# Production: use LibSpatialIndex.jl for O(n log n) R-tree
+candidates = _bbox_candidates(bboxes, n)
+# ── Step 3: Test actual intersection for candidates ──────
+```
+
+I_idx = Int[]
+
+J_idx = Int[]
+
+sizehint!(I_idx, n * 8)  # Pre-allocate assuming ~8 neighbors
+
+sizehint!(J_idx, n * 8)
+
+for i in 1:n
+
+geom_i = geometries[i]
+
+for j in candidates[i]
+
+j == i && continue
+
+```julia
+# GeoInterface.intersects: true if any boundary/interior overlap
+if GeoInterface.intersects(geom_i, geometries[j])
+push!(I_idx, i)
+push!(J_idx, j)
+end
+end
+end
+# ── Step 4: Build sparse binary adjacency matrix ──────────
+```
+
+V_bool = trues(length(I_idx))
+
+W_bin  = sparse(I_idx, J_idx, V_bool, n, n)
+
+```julia
+# ── Step 5: Normalize ─────────────────────────────────────
+```
+
+W_norm = _normalize(W_bin, transform, n)
+
+```julia
+# ── Step 6: Compute summary statistics ────────────────────
+cardinalities  = vec(sum(W_bin; dims=2))
+island_ids     = findall(==(0), cardinalities)
+mean_neighbors = mean(cardinalities)
+min_n  = Int(minimum(cardinalities))
+max_n  = Int(maximum(cardinalities))
+return SpatialWeights(W_norm, W_bin, n, island_ids,
+mean_neighbors, min_n, max_n,
+transform, Queen())
+end
+# ── Internal helpers ──────────────────────────────────────────
+# Bounding box: (xmin, ymin, xmax, ymax)
+function _compute_bboxes(geometries)
+map(geometries) do geom
+coords = GeoInterface.coordinates(geom)
+xs = [p[1] for ring in coords for p in ring]
+ys = [p[2] for ring in coords for p in ring]
+(minimum(xs), minimum(ys), maximum(xs), maximum(ys))
+end
+end
+# Pre-filter: return indices of polygons whose bbox overlaps polygon i
+function _bbox_candidates(bboxes, n)
+candidates = [Int[] for _ in 1:n]
+for i in 1:n
+xi1, yi1, xi2, yi2 = bboxes[i]
+for j in (i+1):n
+xj1, yj1, xj2, yj2 = bboxes[j]
+# Rectangles overlap iff neither is fully to the side/above/below
+if xi1 <= xj2 && xj1 <= xi2 && yi1 <= yj2 && yj1 <= yi2
+push!(candidates[i], j)
+push!(candidates[j], i)  # Symmetric
+end
+end
+end
+return candidates
+end
+# Normalize sparse binary matrix per transform type
+function _normalize(W_bin::SparseMatrixCSC{Bool,Int}, ::RowStd, n::Int)
+```
+
+W = float(W_bin)  # Bool → Float64
+
+row_sums = vec(sum(W; dims=2))
+
+```julia
+# Divide each row by its sum; leave zero-sum rows (islands) as-is
+for i in 1:n
+if row_sums[i] > 0
+# In-place sparse row division: modify .nzval directly
+for j in nzrange(W, i)   # Iterate nonzero cols of row i
+```
+
+W.nzval[j] /= row_sums[i]
+
+```julia
+end
+end
+end
+return W
+end
+_normalize(W_bin::SparseMatrixCSC{Bool,Int}, ::Binary, _) = float(W_bin)
+function _normalize(W_bin::SparseMatrixCSC{Bool,Int}, ::GlobalStd, _)
+```
+
+W = float(W_bin)
+
+S = sum(W)
+
+S > 0 ? W ./ S : W
+
+
+### 17.1.2 K-Nearest Neighbor Weights with NearestNeighbors.jl
+
+```julia
+end
+```
+
+For large datasets or when geometric intersection is unavailable, KNN weights based on distance between centroids are a robust alternative. NearestNeighbors.jl provides a KDTree implementation with O(n log n) construction and O(log n) query time per point, making it suitable for the full U.S. census tract dataset.
+
+```julia
+# === src/weights/knn.jl ===
+using NearestNeighbors, SparseArrays
+"""
+knn_weights(coords, k; transform=RowStd(), metric=Haversine(6371.0))
+```
+
+Build k-nearest-neighbor spatial weights from coordinate matrix.
+
+coords: n×2 matrix of [latitude longitude] in decimal degrees
+
+k:      number of neighbors (each unit has exactly k neighbors)
+
+metric: distance metric (default: Haversine great-circle in km)
+
+"""
+
+```julia
+function knn_weights(
+coords::Matrix{Float64},
+k::Int;
+transform::WeightStyle = RowStd(),
+metric::NearestNeighbors.Metric = NearestNeighbors.Haversine(6371.0)
+)
+n = size(coords, 1)
+k >= n && throw(ArgumentError("k=$(k) >= n=$(n): reduce k"))
+# NearestNeighbors expects points as columns, not rows
+# coords is n×2 [lat lon]; transpose to 2×n
+pts = collect(coords')  # 2×n matrix
+# Build KD-tree (O(n log n))
+tree = KDTree(pts, metric; leafsize=10)
+# Query k+1 nearest (includes self at index 1)
+idxs, _ = knn(tree, pts, k + 1, true)  # sorted by distance
+# Build sparse adjacency from KNN results
+```
+
+I_idx = Int[]
+
+J_idx = Int[]
+
+sizehint!(I_idx, n * k)
+
+sizehint!(J_idx, n * k)
+
+for i in 1:n
+
+for j in idxs[i]
+
+j == i && continue  # skip self
+
+push!(I_idx, i)
+
+push!(J_idx, j)
+
+```julia
+end
+end
+```
+
+W_bin  = sparse(I_idx, J_idx, ones(Bool, length(I_idx)), n, n)
+
+W_norm = _normalize(W_bin, transform, n)
+
+cardinalities  = fill(k, n)  # KNN guarantees exactly k neighbors
+
+return SpatialWeights(W_norm, W_bin, n, Int[],
+
+Float64(k), k, k, transform, KNN())
+
+```julia
+end
+```

@@ -1,0 +1,111 @@
+project:
+  type: book
+  output-dir: _book
+
+book:
+  title: "Geographic Analysis in Julia"
+  subtitle: "Healthcare, Rural Populations, and Spatial Data Science"
+  author: "Julia GeoHealth Series"
+  date: "2026"
+  date-format: "YYYY"
+  repo-url: https://github.com/timothyhartzog/geo-julia
+  repo-actions: [edit, issue]
+  sidebar:
+    search: true
+  page-footer:
+    center: |
+      *Rural healthcare geographic analysis — because where you live should not determine whether you live.*
+
+  chapters:
+    - index.qmd
+
+    - part: "Volume I — Foundations"
+      chapters:
+        - vol1/ch01.qmd
+        - vol1/ch02.qmd
+        - vol1/ch03.qmd
+        - vol1/ch04.qmd
+        - vol1/ch05.qmd
+        - vol1/ch06.qmd
+        - vol1/ch07.qmd
+        - vol1/ch08.qmd
+        - vol1/ch09.qmd
+        - vol1/ch10.qmd
+
+    - part: "Volume II — Gap Analysis and Population Data"
+      chapters:
+        - vol2/ch11.qmd
+        - vol2/ch12.qmd
+        - vol2/ch13.qmd
+        - vol2/ch14.qmd
+        - vol2/ch15.qmd
+
+    - part: "Volume III — Package Engineering"
+      chapters:
+        - vol3/ch16.qmd
+        - vol3/ch17.qmd
+        - vol3/ch18.qmd
+        - vol3/ch19.qmd
+        - vol3/ch20.qmd
+        - vol3/ch21.qmd
+        - vol3/ch22.qmd
+        - vol3/ch23.qmd
+        - vol3/ch24.qmd
+        - vol3/ch25.qmd
+
+    - part: "Volume IV — Advanced Methods and Deployment"
+      chapters:
+        - vol4/ch26.qmd
+        - vol4/ch27.qmd
+        - vol4/ch28.qmd
+        - vol4/ch29.qmd
+        - vol4/ch30.qmd
+        - vol4/ch31.qmd
+        - vol4/ch32.qmd
+        - vol4/ch33.qmd
+        - vol4/ch34.qmd
+
+    - part: "Appendices"
+      chapters:
+        - appendices/appA-C.qmd
+        - appendices/appD.qmd
+        - appendices/references_vol1.qmd
+
+format:
+  html:
+    theme:
+      light: flatly
+      dark: darkly
+    highlight-style: github
+    code-copy: true
+    code-overflow: wrap
+    toc: true
+    toc-depth: 3
+    number-sections: true
+    number-depth: 3
+    smooth-scroll: true
+    df-print: kable
+    fig-align: center
+    link-external-icon: true
+    link-external-newwindow: true
+    css: assets/custom.css
+  pdf:
+    documentclass: scrbook
+    classoption: [oneside]
+    geometry:
+      - top=30mm
+      - left=30mm
+      - right=30mm
+      - bottom=30mm
+    colorlinks: true
+    number-sections: true
+
+execute:
+  eval: false
+  echo: true
+  warning: false
+  freeze: auto
+
+knitr:
+  opts_chunk:
+    comment: "#>"

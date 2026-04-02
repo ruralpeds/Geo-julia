@@ -1,0 +1,153 @@
+---
+title: "Chapter 32: Contributing to Existing JuliaGeo Packages"
+subtitle: "Volume 4 — Advanced Methods, Real Data, and Deployment"
+---
+
+
+## 32.1 The Contribution Workflow
+
+Beyond creating new packages, filling the Julia geospatial gap requires contributing to existing packages. GeoDataFrames.jl needs better overlay operation coverage. GeoMakie.jl needs a native choropleth classification integration. ArchGDAL.jl needs higher-level topology operations. This section covers the professional contribution workflow for JuliaGeo packages, from opening an issue through CI passing and merge.
+
+```julia
+# === Contributing to GeoDataFrames.jl: Adding st_difference ===
+# Step 1: Fork and clone the repository
+# git clone https://github.com/yourusername/GeoDataFrames.jl.git
+# git checkout -b feature/st_difference
+# Step 2: Add the feature — src/GeoDataFrames.jl
+"""
+st_difference(gdf_a, gdf_b)
+```
+
+Compute geometric difference: geometry A minus the intersection with geometry B.
+
+Returns a GeoDataFrame with the same schema as gdf_a.
+
+```julia
+# Example
+```julia
+county_area = st_difference(counties, hpsa_zones)
+```
+"""
+function st_difference(gdf_a::DataFrame, gdf_b::DataFrame)
+# Dissolve gdf_b into a single geometry for subtraction
+b_union = ArchGDAL.union([GeoInterface.convert(ArchGDAL.IGeometry, g)
+for g in gdf_b.geometry]...)
+result_geoms = map(gdf_a.geometry) do geom_a
+a = GeoInterface.convert(ArchGDAL.IGeometry, geom_a)
+```
+
+ArchGDAL.difference(a, b_union)
+
+
+## 32.2 Extending GeoStats.jl for Healthcare Kriging
+
+```julia
+end
+result = copy(gdf_a)
+result.geometry = result_geoms
+return result
+end
+# Step 3: Add tests — test/test_overlay.jl
+@testset "st_difference" begin
+# Simple case: rectangle minus overlapping rectangle
+rect_a = _make_rect(0.0, 0.0, 10.0, 10.0)
+rect_b = _make_rect(5.0, 0.0, 15.0, 10.0)
+gdf_a  = DataFrame(id=1, geometry=[rect_a])
+gdf_b  = DataFrame(id=2, geometry=[rect_b])
+result = st_difference(gdf_a, gdf_b)
+# Expected: 5×10 = 50 sq units (left half of rect_a)
+@test isapprox(ArchGDAL.getarea(result.geometry[1]), 50.0; atol=1e-6)
+# Edge case: no overlap
+rect_c = _make_rect(20.0, 0.0, 30.0, 10.0)
+gdf_c  = DataFrame(id=3, geometry=[rect_c])
+result2 = st_difference(gdf_a, gdf_c)
+@test isapprox(ArchGDAL.getarea(result2.geometry[1]), 100.0; atol=1e-6)
+# Edge case: complete containment
+rect_d = _make_rect(-1.0, -1.0, 11.0, 11.0)
+gdf_d  = DataFrame(id=4, geometry=[rect_d])
+result3 = st_difference(gdf_a, gdf_d)
+@test ArchGDAL.getarea(result3.geometry[1]) < 1e-6
+end
+# Step 4: Update CHANGELOG.md
+# ## [Unreleased]
+# ### Added
+# - `st_difference(gdf_a, gdf_b)`: compute geometric difference
+# Step 5: Open PR with template
+# Title: "feat: add st_difference overlay operation"
+# Body: closes #issue_number, description, example, test coverage
+```
+
+GeoStats.jl is the most mature geostatistics package in Julia and is actively developed by Júlio Hoffimann. It supports kriging — spatial interpolation that produces smoothed continuous surfaces from point-sampled data. For healthcare, kriging is valuable for interpolating provider density surfaces, environmental exposure estimates, and small-area health outcome estimates to arbitrary spatial resolutions. This example extends GeoStats.jl with a healthcare-specific covariance function.
+
+```julia
+# === Extending GeoStats.jl: Healthcare variogram fitting ===
+using GeoStats, GeoTables, DataFrames
+"""
+fit_healthcare_variogram(df, var; max_lag=200.0)
+```
+
+Fit an empirical variogram and select the best theoretical model
+
+for a healthcare variable (e.g., provider density, CVD rate).
+
+Automatically tests Spherical, Exponential, Gaussian models.
+
+Returns best-fit variogram model by Weighted Least Squares.
+
+"""
+
+```julia
+function fit_healthcare_variogram(
+df::DataFrame,
+var::Symbol;
+max_lag::Float64 = 200.0,  # km
+nlags::Int = 30
+)
+# GeoStats expects a GeoTable — wrap DataFrame with geometry
+gt = GeoTable(df; geometry=:geom_col)
+# Empirical variogram
+γ_emp = EmpiricalVariogram(gt, var;
+nlags  = nlags,
+maxlag = max_lag * 1000  # convert km to m
+)
+# Fit three theoretical models and compare WLS error
+models = [SphericalVariogram, ExponentialVariogram, GaussianVariogram]
+fitted = [fit(M, γ_emp) for M in models]
+wls_errors = [sum((γ_emp.ordinate .- fitted[k](γ_emp.abscissa)).^2 ./
+max.(γ_emp.counts, 1))
+for k in 1:length(models)]
+best_idx = argmin(wls_errors)
+@info "Best variogram model: $(models[best_idx]) (WLS=$(round(wls_errors[best_idx];digits=3)))"
+return fitted[best_idx]
+end
+"""
+kriging_surface(df, var, target_grid; variogram=nothing)
+```
+
+Ordinary kriging interpolation of a healthcare variable to a target grid.
+
+df:           Source data (county-level or point-sampled)
+
+var:          Variable to interpolate (e.g., :cvd_rate)
+
+target_grid:  Cartesian2D grid at desired output resolution
+
+Returns GeoTable with kriged estimates and kriging variance.
+
+"""
+
+```julia
+function kriging_surface(
+df::DataFrame,
+var::Symbol,
+target_grid;
+variogram = nothing
+)
+gt = GeoTable(df; geometry=:geom_col)
+γ  = isnothing(variogram) ? fit_healthcare_variogram(df, var) : variogram
+problem  = EstimationProblem(gt, target_grid, var)
+solver   = Kriging(var => (variogram=γ, mean=mean(df[!, var])))
+solution = solve(problem, solver)
+return solution
+end
+```

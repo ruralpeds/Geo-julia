@@ -1,0 +1,272 @@
+---
+title: "Chapter 20: Building SpatialReg.jl — Spatial Econometrics for Julia"
+subtitle: "Volume 3 — Package Engineering: Building the Missing Ecosystem"
+---
+
+
+## 20.1 The Mathematical Foundation of Spatial Regression
+
+The Spatial Lag Model (SLM, also called SAR — Spatial AutoRegressive) and the Spatial Error Model (SEM) each require specialized estimation because OLS produces biased and inconsistent estimates in their presence. Understanding why, and how to implement the correct estimators efficiently, requires understanding the likelihood functions for each model.
+
+For the Spatial Lag Model y = ρWy + Xβ + ε, the fundamental challenge is that the spatially lagged dependent variable Wy is endogenous — it is correlated with the error term ε. The maximum likelihood estimator concentrates the likelihood over ρ, exploiting the fact that for a given ρ, the remaining parameters (β, σ²) are obtained by simple OLS of (I - ρW)y on X. The critical computational bottleneck is the log-determinant of the spatial filter ln|I - ρW|, which must be evaluated at every iteration of the scalar optimization over ρ.
+
+
+### 20.1.1 The Ord (1975) Eigenvalue Trick for Fast Log-Determinant
+
+```julia
+# === src/regression/logdet.jl ===
+# Efficient log-determinant computation using eigenvalues of W
+using LinearAlgebra, SparseArrays, Arpack
+"""
+```
+
+SpatialLogDet
+
+Pre-computed eigenvalue decomposition for fast log-det evaluation.
+
+Construct once; evaluate at many values of ρ efficiently.
+
+The key identity (Ord 1975):
+
+ln|I - ρW| = Σᵢ ln(1 - ρλᵢ)
+
+where λᵢ are the eigenvalues of W.
+
+"""
+
+```julia
+struct SpatialLogDet
+eigenvalues  :: Vector{Float64}   # All eigenvalues of W
+rho_min_safe :: Float64           # 1/λ_max (lower bound for ρ)
+rho_max_safe :: Float64           # 1/λ_min (upper bound for ρ)
+end
+"""
+```
+
+SpatialLogDet(W)
+
+Compute eigenvalues of sparse weight matrix W.
+
+For row-standardized W, λ_max = 1 always.
+
+Uses full eigendecomposition for n < 2000, Arpack for larger n.
+
+"""
+
+```julia
+function SpatialLogDet(W::SparseMatrixCSC{Float64})
+n = size(W, 1)
+if n <= 2000
+# Dense eigendecomposition: O(n³) but exact
+λ = real.(eigvals(Matrix(W)))
+else
+# Arpack: compute extreme eigenvalues only
+# For row-standardized W: λ_max ≈ 1, need λ_min
+# Use k extremes to approximate log-det accurately
+k = min(n ÷ 4, 100)
+λ_large, = eigs(W; nev=k, which=:LR)   # Largest real
+λ_small, = eigs(W; nev=k, which=:SR)   # Smallest real
+# Approximate remaining eigenvalues by linear interpolation
+# (acceptable for likelihood optimization over ρ)
+λ_extreme = sort(real.(vcat(λ_large, λ_small)))
+λ_interior = range(minimum(λ_extreme), maximum(λ_extreme);
+length=n - 2k)
+λ = sort(vcat(λ_extreme, collect(λ_interior)))
+end
+# ρ bounds: 1/λ_max and 1/λ_min (exclusive, with safety margin)
+λ_min  = minimum(λ)
+λ_max  = maximum(λ)
+ρ_lo   = 1.001 / λ_max  # Slightly inside bound for numerical safety
+ρ_hi   = 0.999 / λ_min
+return SpatialLogDet(λ, ρ_lo, ρ_hi)
+end
+"""
+log_det_filter(ld::SpatialLogDet, rho::Float64)
+```
+
+Compute ln|I - ρW| = Σᵢ ln(1 - ρλᵢ) at given ρ.
+
+O(n) after one-time eigenvalue computation.
+
+"""
+
+
+### 20.1.2 Concentrated Log-Likelihood for Spatial Lag Model
+
+```julia
+@inline function log_det_filter(ld::SpatialLogDet, ρ::Float64)::Float64
+s = 0.0
+@inbounds @simd for λ in ld.eigenvalues
+term = 1.0 - ρ * λ
+term <= 0 && return -Inf  # Invalid ρ
+s += log(term)
+end
+return s
+end
+# === src/regression/slm.jl ===
+# Maximum Likelihood Spatial Lag Model
+using LinearAlgebra, SparseArrays, Optim, Statistics
+"""
+slm(y, X, w; verbose=false)
+```
+
+Estimate Spatial Lag Model: y = ρWy + Xβ + ε by Maximum Likelihood.
+
+```julia
+# Arguments
+- `y`: n-vector response
+- `X`: n×k design matrix (include intercept column as first column)
+- `w`: SpatialWeights object
+# Returns SpatialRegResult with all coefficients and diagnostics
+# Example
+```julia
+y = df.cvd_rate
+```
+
+X = [ones(n) df.poverty_rate df.provider_density]
+
+result = slm(y, X, w)
+
+println(result)
+
+```
+
+"""
+
+```julia
+function slm(
+y::AbstractVector{<:Real},
+```
+
+X::AbstractMatrix{<:Real},
+
+w::AbstractSpatialWeights;
+
+verbose::Bool = false
+
+)
+
+n, k = size(X)
+
+length(y) == n ||
+
+throw(DimensionMismatch("y has $(length(y)) rows, X has $(n) rows"))
+
+yf = Float64.(y)
+
+Xf = Float64.(X)
+
+W  = w.W
+
+```julia
+# ── Pre-compute for efficiency ────────────────────────────
+ld  = SpatialLogDet(W)    # One-time eigenvalue computation
+```
+
+Wy  = W * yf              # Spatial lag of y
+
+XtX = Xf' * Xf
+
+XtX_inv = inv(cholesky(Symmetric(XtX)))   # Cholesky for stability
+
+Xty = Xf' * yf
+
+```julia
+# ── Concentrated log-likelihood over ρ ────────────────────
+# For fixed ρ: β̂ = (X'X)⁻¹ X'(y - ρWy), σ̂² = ||e||²/n
+function neg_log_lik(ρ_vec::Vector{Float64})
+ρ = ρ_vec[1]
+(ρ <= ld.rho_min_safe || ρ >= ld.rho_max_safe) && return Inf
+```
+
+Sy  = yf .- ρ .* Wy          # Spatial filter: (I - ρW)y
+
+β   = XtX_inv * (Xf' * Sy)   # OLS of filtered y on X
+
+e   = Sy .- Xf * β           # Residuals
+
+σ2  = dot(e, e) / n          # MLE variance
+
+σ2 <= 0 && return Inf
+
+```julia
+# Concentrated log-likelihood:
+# L(ρ) = ln|I-ρW| - (n/2)ln(σ²) - n/2
+ldet = log_det_filter(ld, ρ)
+return -(ldet - (n/2)*log(σ2) - n/2)
+end
+# ── 1D optimization over ρ ────────────────────────────────
+ρ_lo = ld.rho_min_safe + 1e-6
+ρ_hi = ld.rho_max_safe - 1e-6
+opt = optimize(
+neg_log_lik,
+[0.0],  # Initial guess: ρ=0 (spatial randomness)
+```
+
+BFGS(),
+
+Optim.Options(show_trace=verbose)
+
+)
+
+ρ_hat = Optim.minimizer(opt)[1]
+
+ll_hat = -Optim.minimum(opt)
+
+```julia
+# ── Final parameter estimates ─────────────────────────────
+```
+
+Sy_hat  = yf .- ρ_hat .* Wy
+
+β_hat   = XtX_inv * (Xf' * Sy_hat)
+
+e_hat   = Sy_hat .- Xf * β_hat
+
+σ2_hat  = dot(e_hat, e_hat) / n
+
+```julia
+# ── Standard errors via observed information matrix ───────
+# Approximate asymptotic covariance; see Anselin 1988 for full formula
+# Simplified: se(β) = sqrt(σ² diag((X'X)⁻¹))
+se_β = sqrt.(σ2_hat .* diag(XtX_inv))
+t_β  = β_hat ./ se_β
+# ── Information criteria ──────────────────────────────────
+n_params = k + 2  # k betas + rho + sigma2
+```
+
+AIC = -2ll_hat + 2n_params
+
+BIC = -2ll_hat + log(n)*n_params
+
+```julia
+# ── Pseudo-R² (Nagelkerke) ────────────────────────────────
+ols_ss  = sum((yf .- mean(yf)).^2)
+ll_null = -(n/2)*log(ols_ss/n) - n/2
+pr2 = 1 - exp(-2*(ll_hat - ll_null)/n)
+return SpatialRegResult(
+model_type  = :SLM,
+coef_names  = [:rho; [Symbol("beta_$(i)") for i in 1:k]],
+coefs       = vcat(ρ_hat, β_hat),
+std_errors  = vcat(missing, se_β),   # SE for ρ needs delta method
+t_stats     = vcat(missing, t_β),
+rho         = ρ_hat,
+sigma2      = σ2_hat,
+log_likelihood = ll_hat,
+```
+
+AIC         = AIC,
+
+BIC         = BIC,
+
+pseudo_r2   = pr2,
+
+residuals   = e_hat,
+
+fitted      = Xf * β_hat .+ ρ_hat .* Wy
+
+)
+
+```julia
+end
+```

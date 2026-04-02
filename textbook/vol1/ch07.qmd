@@ -1,0 +1,151 @@
+---
+title: "Chapter 7: Authoritative Data Sources for Rural Health GIS"
+subtitle: "Volume 1 — Geographic Analysis in Julia: Healthcare and Rural Populations"
+---
+
+
+## 7.1 Federal Health Data Repositories
+
+
+### 7.1.1 HRSA Data Warehouse (data.hrsa.gov)
+
+The Health Resources and Services Administration (HRSA) maintains the authoritative federal data warehouse for rural health geographic data. The data.hrsa.gov platform provides access to multiple datasets critical for rural health GIS, all with no usage limitations.
+
+
+### 7.1.2 Area Health Resources Files (AHRF)
+
+The Area Health Resources Files (AHRF) are the single most comprehensive data source for county-level health workforce and health system analysis. The AHRF dataset provides current and historic data for more than 6,000 variables for each of the nation's counties, including data on health care professions, health facilities, measures of resource scarcity, health status, economic activity, health training programs, and socioeconomic and environmental characteristics. The AHRF is available as a SAS transport file and can be imported into Julia via the ReadStatTables.jl package.
+
+
+### 7.1.3 CDC WONDER
+
+```julia
+# Loading AHRF data in Julia
+using ReadStatTables, DataFrames
+# Read SAS transport file from HRSA download
+ahrf_raw = ReadStatTables.read_sas("ahrf2024.sas7bdat")
+ahrf = DataFrame(ahrf_raw)
+# Key AHRF variables for rural health GIS
+# F11 = county FIPS code
+# F1522086 = active primary care MDs per 100,000 pop
+# F1522166 = rural/urban continuum code
+# F1306105 = percent poverty
+# F0453053 = median household income
+# Select rural counties (continuum code >= 4)
+rural_ahrf = filter(r -> r.F1522166 >= 4, ahrf)
+select!(rural_ahrf, :F11, :F1522086, :F1522166, :F1306105, :F0453053)
+```
+
+CDC WONDER (Wide-ranging Online Data for Epidemiologic Research) provides access to public health data collected by the CDC, including mortality data from the National Vital Statistics System, cancer incidence from state registries, natality data, environmental data, and population estimates. For geographic analysis, CDC WONDER is the primary source for county-level mortality rates by cause of death. Data are suppressed for cells with fewer than 10 events to protect privacy — a critical consideration for rural health analysis where small populations lead to frequent suppression.
+
+
+### 7.1.4 U.S. Census Bureau TIGER/Line Files
+
+```julia
+# CDC WONDER API access in Julia
+using HTTP, JSON
+# CDC WONDER has a limited API; most data must be downloaded via web interface
+# But compressed CSV files can be programmatically processed
+# Load downloaded county mortality data
+mortality = CSV.read("cdc_wonder_county_mort_cvd.csv", DataFrame;
+missingstring = "Suppressed")
+# Age-adjust rates (WONDER provides both crude and age-adjusted)
+mortality.rate = parse.(Union{Float64, Missing},
+coalesce.(string.(mortality."Age-Adjusted Rate"), "missing"))
+# Flag suppressed values
+mortality.suppressed = ismissing.(mortality.rate)
+```
+
+The Census Bureau TIGER/Line Shapefiles provide the geographic boundary files essential for any spatial analysis of U.S. health data. TIGER files are available for every geographic unit used in federal health data — states, counties, census tracts, block groups, ZIP Code Tabulation Areas (ZCTAs), congressional districts, and more. They also include road network files, water features, and place boundaries. TIGER files are freely available and carry no usage restrictions.
+
+```julia
+# Download Census TIGER/Line shapefiles programmatically
+using HTTP, ZipFile, Shapefile
+function download_tiger(year::Int, layer::String, state_fips::String="")
+base = "https://www2.census.gov/geo/tiger/TIGER$(year)/"
+filename = if isempty(state_fips)
+"tl_$(year)_us_$(lowercase(layer)).zip"
+else
+"tl_$(year)_$(state_fips)_$(lowercase(layer)).zip"
+end
+url = base * uppercase(layer) * "/" * filename
+resp = HTTP.get(url)
+zip_path = tempname() * ".zip"
+write(zip_path, resp.body)
+dir = tempdir() * "/tiger_$(layer)"
+mkpath(dir)
+```
+
+ZipFile.Reader(zip_path) do z
+
+for f in z.files
+
+open(joinpath(dir, f.name), "w") do io
+
+write(io, read(f))
+
+
+## 7.2 Additional Key Data Sources
+
+
+## 7.3 Accessing the Census API from Julia
+
+```julia
+end
+end
+end
+dir
+end
+# Download county boundaries
+county_dir = download_tiger(2023, "COUNTY")
+counties = Shapefile.Table(joinpath(county_dir, "tl_2023_us_county.shp"))
+```
+
+The U.S. Census Bureau provides a public API that allows programmatic access to American Community Survey (ACS) and decennial census data. The API returns data at the requested geographic level and can be queried for specific variables using their B-table codes. For spatial analysis, ACS data provides essential contextual variables including insurance coverage rates, poverty rates, educational attainment, and demographic composition at the census tract level.
+
+```julia
+using HTTP, JSON, DataFrames
+"""
+```
+
+Fetch ACS 5-year estimates via Census API.
+
+variables: e.g. ["B27001_001E", "B17001_002E"]  (total pop, in poverty)
+
+geography: e.g. "tract", "county"
+
+state_fips: e.g. "38" for North Dakota
+
+year: e.g. 2022
+
+"""
+
+```julia
+function census_api(variables::Vector{String}, geography::String,
+state_fips::String, year::Int;
+api_key::String = ENV["CENSUS_API_KEY"])
+vars_str = join(["NAME"; variables], ",")
+url = "https://api.census.gov/data/$(year)/acs/acs5" *
+"?get=$(vars_str)" *
+"&for=$(geography):*" *
+"&in=state:$(state_fips)" *
+"&key=$(api_key)"
+resp = HTTP.get(url)
+data = JSON.parse(String(resp.body))
+# First row is header
+headers = Symbol.(data[1])
+rows = [Dict(headers[j] => data[i][j] for j in 1:length(headers))
+for i in 2:length(data)]
+```
+
+DataFrame(rows)
+
+```julia
+end
+# Example: uninsurance rate by tract in North Dakota
+acs_nd = census_api(
+["B27001_001E",   # Total population
+"B27001_017E",   # Male 19-25 uninsured
+"B27001_033E"],  # Female 19-25 uninsured
+"tract", "38", 2022)
+```

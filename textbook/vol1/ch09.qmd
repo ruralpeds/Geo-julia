@@ -1,0 +1,117 @@
+---
+title: "Chapter 9: Visualization, Cartography, and Dashboard Design in Julia"
+subtitle: "Volume 1 — Geographic Analysis in Julia: Healthcare and Rural Populations"
+---
+
+
+## 9.1 Principles of Effective Health Map Design
+
+Effective health maps communicate geographic patterns clearly and accurately while avoiding common visual distortions and misrepresentations. Several principles should guide the design of health maps for publication and policy communication.
+
+Choropleth maps — the most common health map type, in which areas are shaded in proportion to their data values — should use carefully selected color schemes. Sequential color schemes (light to dark single hue, such as the ColorBrewer YlOrRd scheme) are appropriate for unipolar data like mortality rates or access scores. Diverging color schemes (two hues converging at a neutral middle, such as RdBu) are appropriate for data that has a meaningful midpoint, such as deviation from a national average or positive/negative z-scores. Qualitative color schemes (distinct hues with no implied ordering) are appropriate for categorical data like LISA cluster categories. ColorBrewer (colorbrewer2.org) provides rigorously tested color schemes that are perceptually uniform and accessible to colorblind viewers.
+
+The choice of data classification method — the algorithm used to assign data values to color classes — substantially influences the visual impression of choropleth maps. Natural breaks (Jenks) classification minimizes within-class variance and is often visually appealing but not reproducible across datasets. Quantile classification ensures equal numbers of areas in each class and distributes color differentiation evenly but can obscure important distributional features. Equal intervals creates mathematically regular class boundaries but can produce visually unbalanced maps when data are skewed. Standard deviation classification highlights departures from the mean and is appropriate for normally distributed data. Analysts should always report the classification method used and consider showing multiple classifications as sensitivity analyses.
+
+
+## 9.2 Multi-Panel Healthcare Atlas Design in GeoMakie
+
+```julia
+using GeoMakie, CairoMakie, ColorSchemes
+"""
+```
+
+Create a four-panel healthcare atlas map:
+
+Panel 1: Primary care provider density
+
+Panel 2: HPSA designation score
+
+Panel 3: 2SFCA accessibility score
+
+Panel 4: LISA clusters of cardiovascular mortality
+
+"""
+
+```julia
+function healthcare_atlas(counties_df, county_geoms;
+outfile = "healthcare_atlas.pdf")
+proj = "+proj=laea +lat_0=45 +lon_0=-96 +ellps=WGS84"
+fig = Figure(resolution = (1800, 1200), fontsize = 14)
+fig[0, 1:2] = Label(fig,
+"Rural Healthcare Access Atlas: Northern Great Plains",
+fontsize = 22, font = :bold, tellwidth = false)
+panels = [
+(1,1, :provider_per_100k, "Primary Care MDs per 100k", :YlGn),
+(1,2, :hpsa_score,         "HPSA Designation Score",    :Reds),
+(2,1, :access_2sfca,       "2SFCA Accessibility Score", :Blues),
+(2,2, :lisa_cluster,       "CVD Mortality LISA Clusters", :RdBu)
+]
+for (row, col, var, title, cmap) in panels
+ax = GeoAxis(fig[row, col];
+dest = proj,
+title = title,
+titlefont = :bold,
+backgroundcolor = "#F5F5F5")
+values = counties_df[!, var]
+poly!(ax, county_geoms;
+color = values,
+colormap = cmap,
+strokecolor = :white,
+strokewidth = 0.3)
+```
+
+Colorbar(fig[row, col+2];
+
+colormap = cmap,
+
+limits = (minimum(values), maximum(values)),
+
+label = title,
+
+width = 15,
+
+height = Relative(0.7))
+
+
+## 9.3 Interactive Dashboards with WGLMakie and Bonito
+
+```julia
+end
+save(outfile, fig; pt_per_unit = 1)
+@info "Saved atlas to $(outfile)"
+end
+```
+
+For interactive geographic exploration, Julia provides WGLMakie (a WebGL-based Makie backend) combined with Bonito.jl (a web-based interactivity framework). Together, these packages enable the creation of interactive dashboards with sliders, dropdowns, and mouse-responsive maps that can be deployed as web applications or served locally in a Pluto.jl notebook.
+
+```julia
+using WGLMakie, Bonito, GeoMakie
+# Interactive county health dashboard
+function interactive_health_dashboard(counties_df, county_geoms)
+variables = [:provider_per_100k, :hpsa_score, :access_2sfca, :cvd_rate]
+var_labels = ["Provider Density", "HPSA Score", "Access Score", "CVD Rate"]
+```
+
+Bonito.App() do session
+
+```julia
+# Dropdown for variable selection
+var_menu = Bonito.Dropdown(var_labels)
+year_slider = Bonito.Slider(2018:2023, value = 2023)
+fig = Figure(resolution = (1200, 700))
+ga = GeoAxis(fig[1,1];
+dest = "+proj=laea +lat_0=45 +lon_0=-96 +ellps=WGS84")
+# Observable plot that updates with selection
+selected_var = map(v -> variables[findfirst(==(v), var_labels)],
+var_menu.value)
+plot_values = map(v -> counties_df[!, v], selected_var)
+poly!(ga, county_geoms; color = plot_values,
+colormap = :viridis, strokecolor = :white, strokewidth = 0.3)
+```
+
+Bonito.DOM.div(var_menu, year_slider, fig)
+
+```julia
+end
+end
+```

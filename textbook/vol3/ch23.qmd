@@ -1,0 +1,299 @@
+---
+title: "Chapter 23: Bridging Julia to Python and R — Production Interoperability"
+subtitle: "Volume 3 — Package Engineering: Building the Missing Ecosystem"
+---
+
+
+## 23.1 PyCall.jl: Calling PySAL from Julia
+
+While SpatialStats.jl and SpatialReg.jl are under development, PyCall.jl provides a production-grade bridge to Python's PySAL suite. The following patterns demonstrate how to seamlessly call PySAL's spreg module from Julia workflows, with automatic data conversion between Julia DataFrames and Python/NumPy objects.
+
+```julia
+# === PyCall bridge for PySAL spatial regression ===
+# Install PyCall and configure Python environment:
+# ] add PyCall
+# ENV["PYTHON"] = "/usr/bin/python3"  # or conda env python
+# ] build PyCall
+using PyCall, SparseArrays, DataFrames
+# Import PySAL modules (lazy — only loaded once per session)
+const libpysal = PyNULL()
+const spreg    = PyNULL()
+const esda     = PyNULL()
+const numpy    = PyNULL()
+function __init__()
+copy!(libpysal, pyimport("libpysal"))
+copy!(spreg,    pyimport("spreg"))
+copy!(esda,     pyimport("esda"))
+copy!(numpy,    pyimport("numpy"))
+end
+"""
+```
+
+Convert Julia SparseMatrixCSC to PySAL W (weights) object.
+
+PySAL W takes a Dict{Int, Vector{Int}} of neighbor lists.
+
+"""
+
+```julia
+function to_pysal_w(W::SparseMatrixCSC{Float64})
+n = size(W, 1)
+# Build Python dict: {i: [j, ...]} for each row i
+neighbors_dict = Dict{Int,Vector{Int}}()
+weights_dict   = Dict{Int,Vector{Float64}}()
+for i in 1:n
+js, ws = findnz(W[i, :])
+neighbors_dict[i-1] = js .- 1   # Python 0-indexed
+weights_dict[i-1]   = ws
+end
+py_w = libpysal.weights.W(neighbors_dict, weights_dict)
+py_w.transform = "R"  # Ensure row-standardized
+return py_w
+end
+"""
+```
+
+Estimate Spatial Lag Model via PySAL GM_Lag from Julia.
+
+Returns NamedTuple compatible with Julia workflow.
+
+"""
+
+```julia
+function pysal_slm(
+y::Vector{Float64},
+```
+
+X::Matrix{Float64},
+
+W::SparseMatrixCSC{Float64};
+
+var_names::Vector{String} = ["x$(i)" for i in 1:size(X,2)]
+
+)
+
+py_w   = to_pysal_w(W)
+
+py_y   = numpy.array(reshape(y, :, 1))
+
+py_X   = numpy.array(X)
+
+model = spreg.GM_Lag(
+
+py_y, py_X;
+
+w         = py_w,
+
+name_y    = "outcome",
+
+name_x    = var_names,
+
+robust    = "white"    # HC robust standard errors
+
+)
+
+```julia
+# Convert Python results back to Julia types
+return (
+rho    = Float64(model.rho),
+betas  = Float64.(vec(model.betas)),
+std_err= Float64.(vec(model.std_err)),
+t_stat = Float64.(vec(model.z_stat[:, 1])),
+p_val  = Float64.(vec(model.z_stat[:, 2])),
+pr2    = Float64(model.pr2),
+```
+
+AIC    = Float64(model.aic),
+
+fitted = Float64.(vec(model.predy)),
+
+resids = Float64.(vec(model.u)),
+
+)
+
+```julia
+end
+"""
+```
+
+Compute LISA via PySAL esda.Moran_Local from Julia.
+
+"""
+
+```julia
+function pysal_lisa(
+values::Vector{Float64},
+```
+
+W::SparseMatrixCSC{Float64};
+
+permutations::Int = 999,
+
+alpha::Float64 = 0.05,
+
+seed::Int = 42
+
+)
+
+py_w = to_pysal_w(W)
+
+py_v = numpy.array(values)
+
+ml = esda.Moran_Local(py_v, py_w;
+
+permutations = permutations,
+
+seed         = seed
+
+)
+
+```julia
+# ml.q: LISA quadrant (1=HH, 2=LH, 3=LL, 4=HL)
+quad_map = Dict(1=>:HH, 2=>:LH, 3=>:LL, 4=>:HL)
+p_sims   = Float64.(ml.p_sim)
+quads    = Int.(ml.q)
+clusters = [p_sims[i] < alpha ? get(quad_map, quads[i], :NS) : :NS
+for i in 1:length(values)]
+return (
+```
+
+I_local  = Float64.(ml.Is),
+
+p_values = p_sims,
+
+cluster  = clusters,
+
+z_scores = Float64.(ml.z_sim),
+
+)
+
+
+## 23.2 RCall.jl: Calling spdep and CARBayes from Julia
+
+```julia
+end
+# === RCall bridge for spdep and CARBayes ===
+using RCall, DataFrames
+"""
+```
+
+Run complete spatial regression workflow via R's spdep/spatialreg.
+
+Includes: OLS + LM tests, SLM, SEM, compare AIC.
+
+"""
+
+```julia
+function r_spatial_workflow(
+y::Vector{Float64},
+```
+
+X::DataFrame,
+
+W::Matrix{Float64};
+
+var_names::Vector{String} = names(X)
+
+)
+
+```julia
+# Pass data to R
+@rput y W
+for (col, nm) in zip(eachcol(X), var_names)
+```
+
+R"assign($(nm), $(col))"
+
+```julia
+end
+formula_str = "y ~ " * join(var_names, " + ")
+@rput formula_str
+R"""
+library(spdep)
+library(spatialreg)
+# Convert dense W to spdep listw object
+```
+
+W_list <- mat2listw(W, style='W')
+
+```julia
+# OLS model
+formula <- as.formula(formula_str)
+ols_mod <- lm(formula)
+# LM tests for spatial specification
+lm_tests <- lm.LMtests(ols_mod, listw=W_list,
+test=c('LMlag','LMerr','RLMlag','RLMerr'))
+# Fit both spatial models
+slm_mod <- lagsarlm(formula, listw=W_list, Durbin=FALSE)
+sem_mod <- errorsarlm(formula, listw=W_list)
+# Summary stats
+results <- list(
+ols_aic  = AIC(ols_mod),
+slm_rho  = slm_mod$rho,
+slm_aic  = AIC(slm_mod),
+sem_lam  = sem_mod$lambda,
+sem_aic  = AIC(sem_mod),
+lm_lag   = lm_tests$LMlag$statistic,
+p_lag    = lm_tests$LMlag$p.value,
+lm_err   = lm_tests$LMerr$statistic,
+p_err    = lm_tests$LMerr$p.value,
+preferred= if(AIC(slm_mod) < AIC(sem_mod)) 'SLM' else 'SEM'
+)
+"""
+@rget results
+return results
+end
+"""
+```
+
+Fit Bayesian BYM disease mapping model via R's CARBayes.
+
+Much simpler interface than Turing.jl for standard disease mapping.
+
+"""
+
+```julia
+function r_bym_model(
+observed::Vector{Int},
+expected::Vector{Float64},
+```
+
+W_bin::Matrix{Bool};
+
+n_iter::Int = 20_000,
+
+burnin::Int  = 5_000
+
+)
+
+```julia
+@rput observed expected W_bin n_iter burnin
+R"""
+library(CARBayes)
+formula <- observed ~ offset(log(expected))
+model <- S.CARbym(
+formula  = formula,
+family   = 'poisson',
+```
+
+W        = W_bin * 1L,   # CARBayes wants integer matrix
+
+burnin   = burnin,
+
+n.sample = n_iter,
+
+verbose  = FALSE
+
+)
+
+rr_mean  <- model$fitted.values / expected
+
+rr_lower <- model$summary.results[, 'Lower'&& '2.5%']  # approx
+
+"""
+
+```julia
+@rget rr_mean
+return rr_mean
+end
+```

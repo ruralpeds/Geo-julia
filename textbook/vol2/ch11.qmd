@@ -1,0 +1,441 @@
+---
+title: "Chapter 11: Deep Gap Analysis — What Julia's Geospatial Ecosystem Lacks"
+subtitle: "Volume 2 — Gap Analysis and Open Population Data"
+---
+
+
+## 11.1 Framing the Analysis
+
+Julia's geospatial ecosystem has matured substantially since the JuliaGeo organization began coordinating development in 2015. The availability of ArchGDAL.jl, GeoDataFrames.jl, Rasters.jl, GeoStats.jl, and GeoMakie.jl provides a foundation that, for many analysis workflows, is genuinely competitive with Python and R. However, an honest assessment reveals that Python's PySAL/GeoPandas stack and R's sf/spdep/spatialreg stack each possess capabilities that Julia currently lacks entirely or offers only as immature partial implementations. These gaps are consequential for rural healthcare analysts and spatial epidemiologists who need production-grade tools covering the full analytical stack.
+
+This chapter provides a rigorous, domain-by-domain gap analysis organized across six dimensions: (1) spatial statistics and spatial econometrics, (2) spatial data operations and topology, (3) geocoding and address matching, (4) routing and network analysis, (5) machine learning integration for spatial data, and (6) data access pipelines for open health and population datasets. For each gap, we assess severity, identify existing workarounds or bridges, and outline the code investment needed to close the gap in a production Julia system.
+
+A critical meta-observation: Julia's gaps are not primarily gaps in the language itself — Julia's mathematical capabilities far exceed what Python or R can offer for implementing new spatial methods. The gaps are primarily in the availability of community-maintained, well-documented, and production-tested implementations of established methods. Python and R have multi-decade head starts and vastly larger user communities. Julia's geospatial user community is growing rapidly but still numbers in the thousands, compared to millions for Python GIS users. This community size differential directly explains most of the package ecosystem gaps identified below.
+
+
+## 11.2 Spatial Statistics and Econometrics Gaps
+
+
+### 11.2.1 The PySAL Comparison
+
+Python's PySAL (Python Spatial Analysis Library) is the gold standard for open-source spatial statistics and spatial econometrics. PySAL is a meta-package encompassing 39 separate repositories organized into four functional domains: explore (spatial autocorrelation, point patterns, spatio-temporal dynamics, segregation), model (spatial regression, geographically weighted regression, spatial generalized linear models), viz (choropleth classification, visualization), and lib (spatial data structures, weights, file I/O). The breadth of PySAL's coverage is extraordinary — including more than 40 segregation indices, multiscale GWR, spatial panel models, spatial interaction models, and point pattern statistics that have no Julia equivalents.
+
+R's spdep package, maintained by Roger Bivand, is the other principal reference implementation of spatial statistical methods. Together, spdep and its spinoff spatialreg provide the canonical implementations of spatial lag models, spatial error models, spatial Durbin models, spatial cross-regressive models, and the full battery of Lagrange multiplier diagnostics for model selection. These are the implementations that all other spatial statistics packages are validated against. Julia has no equivalent.
+
+⚠ GAP  CRITICAL GAP: Julia has no equivalent of PySAL's spreg module or R's spatialreg package.
+
+Spatial regression models (SLM, SEM, SDM) are the standard for spatial epidemiology —
+
+without them, users must call Python/R via inter-process bridges, breaking the single-language
+
+advantage that makes Julia attractive. This is the most consequential gap in the ecosystem.
+
+
+### 11.2.2 Spatial Regression: The Technical Gap in Depth
+
+The spatial lag model (SLM) and spatial error model (SEM) require estimation approaches beyond ordinary least squares because OLS produces biased and inconsistent estimates in the presence of spatial dependence. The standard estimators are maximum likelihood (ML) and generalized method of moments (GMM/instrumental variables). ML estimation requires computing the log-determinant of the spatial filter matrix (I - ρW), which scales as O(n²) in memory and O(n³) in computation for naive implementations — making it intractable for the 73,000+ U.S. census tracts. Production implementations use sparse matrix representations and the Cholesky factorization or eigendecomposition of the spatial weights matrix to reduce this to O(n log n) or O(n·k) for sparse W.
+
+Julia's LinearAlgebra and SparseArrays standard libraries provide all the mathematical primitives needed to implement these estimators. The implementation challenge is not mathematical — it is the software engineering investment of building a robust, tested, documented package that handles edge cases, produces diagnostics comparable to those from spdep, and integrates cleanly with Julia's DataFrames ecosystem. This is an achievable but substantial community effort that has not yet materialized.
+
+```julia
+# === PROTOTYPE: Maximum Likelihood Spatial Lag Model in Julia ===
+# This illustrates what a full SpatialReg.jl package would need to implement
+using LinearAlgebra, SparseArrays, Optim, Statistics
+"""
+    spatial_lag_ml(y, X, W)
+Maximum likelihood estimation of the spatial lag model (SAR).
+y = ρWy + Xβ + ε,  ε ~ N(0, σ²I)
+
+Returns NamedTuple: (rho, beta, sigma2, log_lik, AIC, BIC)
+"""
+function spatial_lag_ml(y::Vector{Float64}, X::Matrix{Float64},
+```
+
+W::SparseMatrixCSC{Float64})
+
+n, k = size(X)
+
+```julia
+@assert length(y) == n "y and X must have same number of rows"
+# Pre-compute eigenvalues of W for log-det computation (Ord 1975)
+# Only valid for symmetric W; use sparse eigensolver for large n
+eigs_W = eigvals(Matrix(W))  # For production, use Arpack.jl
+# Log-likelihood function for rho
+function neg_log_lik(ρ)
+```
+
+S = I - ρ .* W  # Spatial filter: (I - ρW)
+
+Sy = S * y
+
+```julia
+# OLS of Sy on X gives beta-hat conditional on rho
+beta_hat = X \ Sy
+e = Sy - X * beta_hat
+σ2 = dot(e, e) / n
+# Log-determinant via pre-computed eigenvalues
+log_det_S = sum(log.(abs.(1.0 .- ρ .* eigs_W)))
+ll = log_det_S - (n/2.0)*log(σ2) - n/2.0
+return -ll  # return negative for minimization
+end
+# Optimize over rho ∈ (1/λ_min, 1/λ_max)
+λ_min, λ_max = minimum(real.(eigs_W)), maximum(real.(eigs_W))
+ρ_bounds = (1.01/λ_max, 0.99/λ_min)
+result = optimize(neg_log_lik, ρ_bounds..., Brent())
+ρ_hat = Optim.minimizer(result)
+# Final parameter estimates at optimal rho
+```
+
+S_hat = I - ρ_hat .* W
+
+Sy = S_hat * y
+
+β_hat = X \ Sy
+
+e = Sy - X * β_hat
+
+σ2_hat = dot(e,e) / n
+
+ll_hat = -Optim.minimum(result)
+
+```julia
+# Information criteria
+```
+
+AIC = -2ll_hat + 2(k + 2)   # k betas + rho + sigma2
+
+BIC = -2ll_hat + log(n)*(k + 2)
+
+return (rho=ρ_hat, beta=β_hat, sigma2=σ2_hat,
+
+log_lik=ll_hat, AIC=AIC, BIC=BIC)
+
+```julia
+end
+# === Lagrange Multiplier Tests for Model Selection ===
+# (analogous to spdep::lm.LMtests in R)
+function lm_spatial_tests(ols_residuals::Vector{Float64},
+```
+
+X::Matrix{Float64},
+
+W::SparseMatrixCSC{Float64})
+
+n = length(ols_residuals)
+
+e = ols_residuals
+
+σ2 = dot(e,e) / n
+
+We = W * e
+
+```julia
+# LM-lag statistic
+```
+
+T_11 = tr(Matrix(W*W) + Matrix(W'*W))
+
+J_11 = T_11 / σ2
+
+LM_lag = (dot(e, We) / σ2)^2 / J_11
+
+```julia
+# LM-error statistic
+```
+
+LM_err = (dot(e, We))^2 / (σ2^2 * tr(Matrix(W'*W + W*W)))
+
+
+### 11.2.3 Point Pattern Analysis: The spatstat Gap
+
+```julia
+# Chi-squared(1) p-values
+using Distributions
+χ2 = Chisq(1)
+p_lag = 1 - cdf(χ2, LM_lag)
+p_err = 1 - cdf(χ2, LM_err)
+return (LM_lag=LM_lag, p_lag=p_lag, LM_err=LM_err, p_err=p_err)
+end
+```
+
+R's spatstat package is one of the most comprehensive statistical computing packages in existence — it contains over 2,000 functions for analysis of two-dimensional point patterns, including intensity estimation, complete spatial randomness tests, the K function, L function, pair correlation function, mark correlation function, Cox processes, Neyman-Scott processes, and a vast array of model-fitting routines. For spatial epidemiology applications such as identifying disease clusters, testing whether cases cluster near environmental hazards, or analyzing the spatial distribution of healthcare facilities, spatstat is essentially irreplaceable.
+
+Julia has no equivalent. The pointpats module in PySAL, while far less comprehensive than spatstat, provides at least K function estimation, nearest-neighbor statistics, and basic point process simulation. Julia currently offers NearestNeighbors.jl for efficient nearest-neighbor search and RegionTrees.jl for spatial indexing, but these are low-level infrastructure packages — not statistical analysis tools. For healthcare facility analysis (Are rural hospitals distributed randomly? Are they clustered near population centers? Do access deserts exhibit spatial clustering?), the absence of point pattern analysis in Julia is a significant gap.
+
+
+## 11.3 Spatial Data Operations and Topology Gaps
+
+
+### 11.3.1 The Topology Problem
+
+Geographic data formats on disk — including the ubiquitous Shapefile and GeoJSON formats — do not preserve topological information. Topology in the GIS sense refers to the explicit encoding of spatial relationships between features: which polygons share which boundaries, how polygons nest within one another, and which boundary segments belong to which features. Topological data structures are essential for operations like dissolve (merging polygons that share a boundary), clean topology (finding and fixing gaps and overlaps between adjacent polygons), and computing adjacency relationships.
+
+The JuliaEarth/Geospatial Data Science with Julia book explicitly acknowledges this limitation: most GIS file formats do not preserve topological information, and loading a geotable from a .geojson file back after saving causes the grid to be replaced by a geometry set, losing the neighborhood structure. This is not merely a convenience issue — it means that spatial weights matrices cannot be reliably reconstructed from serialized vector data without re-computing from scratch. Python's PostGIS integration (via SQLAlchemy/geoalchemy2) and R's sf package both handle topology more gracefully.
+
+⚠ GAP  GAP: Julia lacks native topology-aware vector data structures.
+
+Operations that depend on shared boundary information (dissolve, topological clean,
+
+snap-to-grid) require round-tripping through GDAL or external processing.
+
+For production GIS pipelines, this creates fragility at every serialization boundary.
+
+
+### 11.3.2 Vector Overlay Operations
+
+Spatial overlay operations — intersection, union, difference, symmetric difference — are fundamental to healthcare GIS. Computing the overlap between HPSA-designated areas and rural census tracts, intersecting hospital catchment areas with county boundaries, or unioning county polygons to create state-level aggregations are all overlay operations. In Python, these are handled by GeoPandas via its overlay() function. In R, they are handled by sf::st_intersection(), st_union(), and related functions. Both leverage the GEOS C++ library for computational geometry.
+
+Julia's ArchGDAL.jl provides access to GDAL's OGR layer operations, which can perform overlay operations, but the interface is low-level and requires explicit management of OGR layer objects. GeoDataFrames.jl provides higher-level overlay functions built on ArchGDAL, but its coverage is incomplete: st_intersection and st_union are implemented, but more complex overlay combinations (st_difference, topological snap operations) are missing or undocumented. GeometryOps.jl, a newer JuliaGeo package, is filling this gap but was not mature as of 2025.
+
+
+### 11.3.3 Spatial Indexing at Scale
+
+Processing spatial joins and proximity queries on large datasets (>100,000 features) requires spatial indexing to achieve acceptable performance. R-tree and quadtree spatial indices enable O(log n) proximity queries instead of O(n) brute-force searches. Python's GeoPandas uses STRtree (Sort-Tile-Recursive tree) from Shapely/GEOS. R's sf uses GEOS STRtree internally.
+
+Julia has LibSpatialIndex.jl (an R-tree implementation via libspatialindex), SpatialIndexing.jl (a pure Julia R-tree), and RegionTrees.jl (quadtrees/octrees). These are functional but are not tightly integrated into the GeoDataFrames or ArchGDAL pipelines — users must manually construct the spatial index and integrate it with their query logic. In Python or R, spatial indexing is transparent to the user, happening automatically behind the interface of sjoin or st_join. In Julia, it requires explicit management.
+
+
+## 11.4 Geocoding and Address Matching Gaps
+
+
+### 11.4.1 The Geocoding Desert in Julia
+
+Geocoding — converting a street address or place name into geographic coordinates — is one of the most common operations in healthcare GIS. Patient address geocoding for calculating travel distances, provider location geocoding from licensing databases, and facility address geocoding from CMS provider files all require reliable geocoding. Python has multiple mature geocoding libraries, led by geopy, which provides a unified interface to 20+ geocoding services including the U.S. Census Bureau Geocoder, OpenStreetMap Nominatim, Google Maps, HERE, ArcGIS Online, and Pelias. R's tidygeocoder package provides an equally clean interface to the same services.
+
+Julia has no geocoding package. There is no Julia equivalent of geopy or tidygeocoder. This is not a gap that can be bridged with clever use of existing packages — geocoding requires a dedicated library that manages API authentication, rate limiting, address normalization, batch submission, result parsing, and error handling for each geocoding service. Building this from scratch using HTTP.jl and JSON.jl is entirely possible in Julia — but no one has done it yet. For healthcare analysts who need to geocode thousands of patient addresses or provider locations, this forces a choice: use Python or R for geocoding as a preprocessing step, or call web APIs directly with hand-written HTTP code.
+
+⚠ GAP  CRITICAL GAP: Julia has no geocoding library.
+
+Every spatial health analysis that begins with address data — which is most of them —
+
+requires a preprocessing step outside Julia. This breaks the single-workflow advantage
+
+and creates data handoff points that introduce friction and potential for error.
+
+✔ BRIDGE  CURRENT WORKAROUND: Use the U.S. Census Bureau Geocoder REST API directly via HTTP.jl.
+
+The Census Geocoder is free, handles U.S. addresses, returns lat/lon and census tract FIPS.
+
+Batch endpoint accepts up to 1,000 addresses per request as a CSV payload.
+
+Rate limits are generous for research use. See implementation below.
+
+```julia
+# === U.S. Census Bureau Geocoder in Julia (no external package needed) ===
+using HTTP, CSV, DataFrames, IOBuffer
+"""
+census_geocode_batch(addresses; vintage="Current")
+```
+
+Geocode U.S. addresses using the Census Bureau Geocoder batch API.
+
+addresses: DataFrame with columns: id, street, city, state, zip
+
+Returns DataFrame with columns from input + lat, lon, match_type,
+
+matched_address, census_tract_fips
+
+Max batch size: 1,000 addresses. Calls are free, no API key required.
+
+"""
+
+```julia
+function census_geocode_batch(addresses::DataFrame;
+vintage::String = "Current")
+n = nrow(addresses)
+n > 1000 && error("Batch size limit is 1,000 addresses.")
+# Format as CSV payload required by Census API
+csv_buf = IOBuffer()
+```
+
+CSV.write(csv_buf, select(addresses, :id, :street, :city, :state, :zip))
+
+csv_bytes = take!(csv_buf)
+
+url = "https://geocoding.geo.census.gov/geocoder/geographies/addressbatch"
+
+resp = HTTP.post(url,
+
+[],  # no extra headers
+
+HTTP.Form([
+
+"addressFile" => HTTP.Multipart("addresses.csv", IOBuffer(csv_bytes),
+
+"text/csv"),
+
+"benchmark" => "Public_AR_Current",
+
+"vintage"   => vintage
+
+])
+
+)
+
+
+## 11.5 Routing and Network Analysis Gaps
+
+
+### 11.5.1 The Absence of OSMnx in Julia
+
+```julia
+# Parse response CSV
+result_raw = String(resp.body)
+io = IOBuffer(result_raw)
+cols = [:id, :input_address, :match, :match_type, :matched_address,
+:lon_lat, :tiger_line_id, :side, :state_fips, :county_fips,
+:tract, :block]
+result = CSV.read(io, DataFrame;
+header = false, silencewarnings = true,
+types = Dict(1=>String))
+rename!(result, cols[1:ncol(result)])
+# Parse lon/lat from combined column
+result.lon = map(r -> begin
+!ismissing(r.lon_lat) && !isempty(r.lon_lat) ?
+parse(Float64, split(r.lon_lat, ",")[1]) : missing
+end, eachrow(result))
+result.lat = map(r -> begin
+!ismissing(r.lon_lat) && !isempty(r.lon_lat) ?
+parse(Float64, split(r.lon_lat, ",")[2]) : missing
+end, eachrow(result))
+# Build census tract FIPS
+result.tract_fips = map(r ->
+ismissing(r.state_fips) ? missing :
+rpad(r.state_fips,2,"0") * rpad(r.county_fips,3,"0") * lpad(r.tract,6,"0"),
+eachrow(result))
+return result
+end
+# === Chunked batch geocoding for large address lists ===
+function geocode_all(addresses::DataFrame; batch_size=500, sleep_sec=1.0)
+n = nrow(addresses)
+batches = [addresses[i:min(i+batch_size-1,n),:] for i in 1:batch_size:n]
+results = DataFrame[]
+for (k, batch) in enumerate(batches)
+@info "Geocoding batch $(k)/$(length(batches)) ($(nrow(batch)) addresses)"
+push!(results, census_geocode_batch(batch))
+k < length(batches) && sleep(sleep_sec)  # rate limit respect
+end
+vcat(results...)
+end
+```
+
+Python's OSMnx package, developed by Geoff Boeing at USC, is the definitive tool for working with OpenStreetMap street network data in Python. OSMnx provides a complete workflow from data acquisition (downloading street network data for any geographic area from the Overpass API) through network analysis (computing routing statistics, betweenness centrality, street orientation distributions) to visualization (plotting street networks with customizable styling). OSMnx has been used to construct a global database of street networks with indicators for every urban area in the world and is the standard tool for network-based healthcare accessibility analysis.
+
+Julia's OpenStreetMapX.jl provides parsing of OSM .pbf and .xml files, graph construction from the parsed data, and basic Dijkstra shortest-path routing. It is functional for straightforward origin-destination routing but lacks many of OSMnx's capabilities: it cannot download network data programmatically from Overpass, cannot compute network statistics (circuity, orientation entropy, betweenness), and does not support multi-modal networks (walking + transit + cycling). For rural healthcare travel time analysis, OpenStreetMapX.jl is a workable starting point but not a complete solution.
+
+⚠ GAP  GAP: Julia lacks a programmatic OSM data downloader and network analysis package.
+
+The Overpass API must be queried manually via HTTP.jl; no package wraps it cleanly.
+
+Network statistics important for rural road quality analysis (circuity, node connectivity)
+
+are not implemented. Multi-modal routing (drive + walk + transit) is not supported.
+
+✔ BRIDGE  BEST CURRENT BRIDGE: Use the OSRM HTTP API for production travel time matrices.
+
+OSRM can be self-hosted using Docker from the official OSRM Docker image.
+
+It handles the full U.S. road network and returns sub-second responses for
+
+single O-D pairs and fast table queries for batch O-D matrices.
+
+```julia
+# === Self-hosted OSRM integration for rural healthcare travel time analysis ===
+# Assumes OSRM backend running locally: docker run -t -i -p 5000:5000 ...
+using HTTP, JSON, DataFrames
+"""
+osrm_table(origins, destinations; host="http://localhost:5000")
+```
+
+Compute all-pairs travel time matrix via self-hosted OSRM.
+
+origins/destinations: Vector of (lat, lon) tuples
+
+Returns Matrix{Float64} of drive times in minutes (n_orig × n_dest).
+
+Self-hosting eliminates rate limits for production batch analysis.
+
+"""
+
+```julia
+function osrm_table(origins::Vector{NTuple{2,Float64}},
+destinations::Vector{NTuple{2,Float64}};
+host::String = "http://localhost:5000")
+all_locs = vcat(origins, destinations)
+coord_str = join("$(lon),$(lat)" for (lat, lon) in all_locs, ";")
+src_str   = join(0:(length(origins)-1), ";")
+dst_str   = join(length(origins):(length(all_locs)-1), ";")
+url = "$(host)/table/v1/driving/$(coord_str)" *
+"?sources=$(src_str)&destinations=$(dst_str)&annotations=duration"
+resp = HTTP.get(url; readtimeout=120)
+data = JSON.parse(String(resp.body))
+data["code"] == "Ok" || error("OSRM error: $(data["code"])")
+n_o, n_d = length(origins), length(destinations)
+mat = Matrix{Float64}(undef, n_o, n_d)
+for i in 1:n_o, j in 1:n_d
+t = data["durations"][i][j]
+mat[i,j] = isnothing(t) ? Inf : t / 60.0  # seconds → minutes
+end
+mat
+end
+# === Overpass API downloader (bridging the OSMnx gap) ===
+"""
+download_osm_network(bbox; transport="drive")
+```
+
+Download OSM road network for a bounding box from Overpass API.
+
+bbox: (south, west, north, east) in WGS84 decimal degrees
+
+transport: "drive" (paved roads), "walk" (all paths), "all"
+
+Returns raw OSM XML string; save as .osm for OpenStreetMapX.jl parsing.
+
+"""
+
+
+## 11.6 Machine Learning Integration Gaps for Spatial Data
+
+
+### 11.6.1 Spatial Cross-Validation
+
+```julia
+function download_osm_network(bbox::NTuple{4,Float64};
+transport::String = "drive")
+s, w, n, e = bbox
+filter_str = if transport == "drive"
+"[\"highway\"~\"motorway|trunk|primary|secondary|tertiary|residential\"]"
+elseif transport == "walk"
+"[\"highway\"][\"highway\"!~\"motorway|trunk\"]"
+else  # all
+"[\"highway\"]"
+end
+query = """
+[out:xml][timeout:300];
+(
+way$(filter_str)($(s),$(w),$(n),$(e));
+>;
+);
+out body;
+"""
+resp = HTTP.post("https://overpass-api.de/api/interpreter",
+["Content-Type" => "application/x-www-form-urlencoded"],
+"data=" * HTTP.URIs.escapeuri(query);
+readtimeout=300)
+return String(resp.body)
+end
+```
+
+When applying machine learning to spatial prediction problems — predicting health outcomes from spatial features, predicting provider supply from demographic covariates, or predicting access deserts from network features — standard k-fold cross-validation is inappropriate. Because spatially autocorrelated data violates the independence assumption of standard cross-validation, standard CV produces optimistically biased performance estimates. Spatial cross-validation, which partitions data into spatially contiguous blocks and uses these blocks as CV folds, is the methodologically correct approach.
+
+Python's sperrorest package and several scikit-learn extensions implement spatial cross-validation. R's sperrorest and mlr3spatiotempcv packages provide comprehensive spatial CV frameworks. Julia's MLJ.jl provides a rich machine learning framework but does not implement spatial resampling strategies. The implementation of spatial CV in Julia requires writing custom resampling functions that partition spatial units into contiguous blocks — achievable but not yet packaged.
+
+
+### 11.6.2 Graph Neural Networks for Spatial Health
+
+Graph Neural Networks (GNNs) represent the frontier of spatial machine learning for health applications. By representing counties or census tracts as nodes in a graph with edges encoding adjacency or distance relationships, GNNs can learn to use spatial context — the health environment of neighboring areas — as an inductive bias for predicting health outcomes. Python has mature GNN frameworks in PyTorch Geometric (PyG) and Deep Graph Library (DGL), both of which have been applied to county-level health prediction tasks.
+
+Julia's GraphNeuralNetworks.jl (now Lux.jl-based) is a native Julia GNN framework that is genuinely competitive with Python alternatives for non-spatial applications. However, it lacks the spatial graph construction utilities that PyTorch Geometric provides — specifically the ability to construct a graph from geographic data (coordinates, shapefiles, spatial weights matrices) and to perform spatial pooling operations that aggregate node features across geographic hierarchies (tracts → counties → states). This spatial graph construction bridge is the missing link between Julia's GNN capabilities and spatial health applications.
+
+
+## 11.7 Complete Gap Summary and Remediation Roadmap

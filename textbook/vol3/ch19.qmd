@@ -1,0 +1,293 @@
+---
+title: "Chapter 19: Building Geocode.jl — Address Matching for Healthcare GIS"
+subtitle: "Volume 3 — Package Engineering: Building the Missing Ecosystem"
+---
+
+
+## 19.1 Package Architecture for Geocode.jl
+
+Geocode.jl must solve three engineering challenges: abstracting over multiple geocoding service APIs (Census, Nominatim, Google), implementing robust rate limiting and retry logic, and handling the messy reality of address data quality (incomplete addresses, abbreviations, P.O. boxes, rural route designations). The design uses a trait-based service abstraction so users can switch backends without changing call sites.
+
+```julia
+# === src/Geocode.jl: Module architecture ===
+module Geocode
+using HTTP, JSON, CSV, DataFrames, URIs
+# ── Abstract service type ─────────────────────────────────────
+"""
+```
+
+AbstractGeocoder
+
+Abstract supertype for all geocoding backends.
+
+Subtypes must implement:
+
+- geocode(::AbstractGeocoder, address::String) → GeocodedAddress
+
+- geocode_batch(::AbstractGeocoder, addrs::DataFrame) → DataFrame
+
+"""
+
+```julia
+abstract type AbstractGeocoder end
+# ── Result type ───────────────────────────────────────────────
+"""
+```
+
+GeocodedAddress
+
+Standardized geocoding result across all backends.
+
+"""
+
+```julia
+struct GeocodedAddress
+input_address    :: String
+matched_address  :: Union{String, Missing}
+lat              :: Union{Float64, Missing}
+lon              :: Union{Float64, Missing}
+match_type       :: Symbol   # :exact, :non_exact, :tie, :no_match
+quality          :: Float64  # 0.0 (no match) to 1.0 (exact)
+census_tract_fips :: Union{String, Missing}  # US-specific
+source           :: Symbol   # :census, :nominatim, :google, etc.
+end
+# ── Concrete geocoder types ───────────────────────────────────
+"""Census Bureau Geocoder (free, U.S. addresses only)"""",
+struct CensusGeocoder <: AbstractGeocoder
+benchmark    :: String
+vintage      :: String
+timeout      :: Int
+max_retries  :: Int
+```
+
+CensusGeocoder(; benchmark="Public_AR_Current",
+
+vintage="Current",
+
+timeout=30,
+
+max_retries=3) =
+
+new(benchmark, vintage, timeout, max_retries)
+
+```julia
+end
+"""OpenStreetMap Nominatim (free, global, rate limited to 1 req/sec)"""",
+struct NominatimGeocoder <: AbstractGeocoder
+base_url     :: String
+user_agent   :: String  # Required by Nominatim usage policy
+timeout      :: Int
+```
+
+NominatimGeocoder(user_agent::String;
+
+base_url="https://nominatim.openstreetmap.org",
+
+timeout=10) =
+
+new(base_url, user_agent, timeout)
+
+
+### 19.1.1 Census Geocoder Backend — Full Implementation
+
+```julia
+end
+# ── Exports ───────────────────────────────────────────────────
+export AbstractGeocoder, GeocodedAddress
+export CensusGeocoder, NominatimGeocoder
+export geocode, geocode_batch, geocode_all
+export normalize_address, score_match
+include("census.jl")
+include("nominatim.jl")
+include("batch.jl")
+include("normalize.jl")
+end  # module Geocode
+# === src/census.jl ===
+# Census Bureau Geocoder: batch endpoint, free, no API key
+using HTTP, CSV, DataFrames, Dates
+"""
+geocode_batch(g::CensusGeocoder, addresses::DataFrame)
+```
+
+Batch geocode up to 1,000 U.S. addresses via Census Geocoder API.
+
+addresses must have columns: :id, :street, :city, :state, :zip
+
+Returns DataFrame with original columns plus geocoding results.
+
+"""
+
+```julia
+function geocode_batch(
+g::CensusGeocoder,
+addresses::DataFrame
+)::DataFrame
+nrow(addresses) <= 1000 ||
+error("Batch limit is 1,000. Use geocode_all() for larger datasets.")
+_required_cols = [:id, :street, :city, :state, :zip]
+for col in _required_cols
+col in propertynames(addresses) ||
+throw(ArgumentError("Missing required column: $(col)"))
+end
+# ── Build CSV payload ─────────────────────────────────────
+buf = IOBuffer()
+for row in eachrow(addresses)
+line = join([string(row.id), string(row.street),
+string(row.city),  string(row.state),
+string(row.zip)], ",")
+println(buf, line)
+end
+payload = take!(buf)
+# ── POST to Census Geocoder ───────────────────────────────
+url = "https://geocoding.geo.census.gov/geocoder/geographies/addressbatch"
+resp = _retry(g.max_retries, g.timeout) do
+```
+
+HTTP.post(url, [],
+
+HTTP.Form([
+
+"addressFile" => HTTP.Multipart("addr.csv",
+
+IOBuffer(payload), "text/csv"),
+
+"benchmark"   => g.benchmark,
+
+"vintage"     => g.vintage,
+
+"format"      => "json"
+
+])
+
+)
+
+
+### 19.1.2 Chunked Batch Geocoding for Large Address Files
+
+```julia
+end
+# ── Parse response ────────────────────────────────────────
+_parse_census_response(resp, addresses)
+end
+function _parse_census_response(resp, original::DataFrame)::DataFrame
+body = String(resp.body)
+# Census returns CSV with variable column count
+# Matched: id,input_addr,Match,Exact,matched_addr,lonlat,TIGERID,side,state,county,tract,block
+# Unmatched: id,input_addr,No_Match
+result_rows = []
+for line in eachline(IOBuffer(body))
+isempty(strip(line)) && continue
+parts = split(line, ","; limit=12)
+id  = string(parts[1])
+matched = length(parts) >= 3 && parts[3] == "Match"
+if matched
+exact   = parts[4] == "Exact"
+matched_addr = length(parts) >= 5 ? parts[5] : missing
+lonlat  = length(parts) >= 6 ? split(parts[6], ",") : nothing
+lon = !isnothing(lonlat) && length(lonlat)==2 ?
+tryparse(Float64, lonlat[1]) : missing
+lat = !isnothing(lonlat) && length(lonlat)==2 ?
+tryparse(Float64, lonlat[2]) : missing
+sf  = length(parts) >= 9  ? rpad(parts[9],2,'0')  : missing
+sc  = length(parts) >= 10 ? rpad(parts[10],3,'0') : missing
+st  = length(parts) >= 11 ? lpad(parts[11],6,'0') : missing
+fips = (!ismissing(sf) && !ismissing(sc) && !ismissing(st)) ?
+sf*sc*st : missing
+push!(result_rows, (id=id, lat=lat, lon=lon,
+matched_address=matched_addr,
+match_type=exact ? :exact : :non_exact,
+quality=exact ? 1.0 : 0.75,
+tract_fips=fips, source=:census))
+else
+push!(result_rows, (id=id, lat=missing, lon=missing,
+matched_address=missing, match_type=:no_match,
+quality=0.0, tract_fips=missing, source=:census))
+end
+end
+return DataFrame(result_rows)
+end
+# ── Exponential backoff retry wrapper ─────────────────────────
+function _retry(f::Function, max_retries::Int, timeout::Int)
+for attempt in 1:max_retries
+try
+return f()
+catch e
+if attempt == max_retries || !(e isa HTTP.ExceptionRequest.StatusError)
+rethrow(e)
+end
+sleep_time = 2.0^(attempt - 1)  # 1, 2, 4 seconds
+@warn "Geocoder attempt $(attempt) failed: $(e). Retrying in $(sleep_time)s"
+sleep(sleep_time)
+end
+end
+end
+# === src/batch.jl ===
+# Handles arbitrarily large address files via chunking
+"""
+geocode_all(g::AbstractGeocoder, addresses::DataFrame;
+batch_size=500, sleep_sec=1.0, verbose=true)
+```
+
+Geocode an arbitrarily large address list by splitting into batches.
+
+Respects rate limits with configurable sleep between batches.
+
+Writes progress to stdout if verbose=true.
+
+Returns combined DataFrame of all geocoded results.
+
+"""
+
+```julia
+function geocode_all(
+g::AbstractGeocoder,
+addresses::DataFrame;
+batch_size::Int = 500,
+sleep_sec::Float64 = 1.0,
+verbose::Bool = true
+)::DataFrame
+n = nrow(addresses)
+n == 0 && return DataFrame()
+# Validate and coerce column types
+addresses = _prepare_addresses(addresses)
+# Create batches
+n_batches = ceil(Int, n / batch_size)
+batches = [addresses[((k-1)*batch_size+1):min(k*batch_size, n), :]
+for k in 1:n_batches]
+results = Vector{DataFrame}(undef, n_batches)
+t_start = time()
+for (k, batch) in enumerate(batches)
+verbose && print("Batch $(k)/$(n_batches) ($(nrow(batch)) records)...")
+t0 = time()
+results[k] = geocode_batch(g, batch)
+elapsed = round(time() - t0; digits=1)
+matched = count(r -> r.match_type != :no_match, eachrow(results[k]))
+verbose && println(" $(matched)/$(nrow(batch)) matched ($(elapsed)s)")
+# Rate limit compliance
+if k < n_batches
+sleep(sleep_sec)
+end
+end
+combined = vcat(results...)
+total_elapsed = round(time() - t_start; digits=1)
+total_matched = count(r -> r.match_type != :no_match, eachrow(combined))
+verbose && println("")
+verbose && println("Total: $(total_matched)/$(n) matched ($(total_elapsed)s total)")
+return combined
+end
+# ── Address normalization for better match rates ──────────────
+"""Normalize common address abbreviations before geocoding"""
+function normalize_address(addr::String)::String
+addr = strip(addr)
+addr = replace(addr, r"\bST\b"i  => "STREET")
+addr = replace(addr, r"\bAVE\b"i => "AVENUE")
+addr = replace(addr, r"\bDR\b"i  => "DRIVE")
+addr = replace(addr, r"\bRD\b"i  => "ROAD")
+addr = replace(addr, r"\bBLVD\b"i=> "BOULEVARD")
+addr = replace(addr, r"\bLN\b"i  => "LANE")
+addr = replace(addr, r"\bPKWY\b"i=> "PARKWAY")
+# Remove apartment numbers (often confuse geocoders)
+addr = replace(addr, r"\s+(APT|UNIT|STE|#)\s+\S+"i => "")
+return uppercase(addr)
+end
+```

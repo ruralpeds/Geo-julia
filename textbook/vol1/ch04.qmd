@@ -1,0 +1,265 @@
+---
+title: "Chapter 4: Spatial Statistics for Population Health"
+subtitle: "Volume 1 — Geographic Analysis in Julia: Healthcare and Rural Populations"
+---
+
+
+## 4.1 Exploratory Spatial Data Analysis (ESDA)
+
+Exploratory Spatial Data Analysis (ESDA) is the spatial equivalent of exploratory data analysis — a collection of descriptive and visual methods for detecting patterns, clusters, and anomalies in geographically distributed data before fitting formal models. ESDA is the essential first step in any spatial health analysis, providing both a sanity check on data quality and substantive insights into the geographic structure of the phenomenon under investigation.
+
+The ESDA workflow for health data typically proceeds through: (1) univariate data visualization using maps, histograms, and box plots; (2) spatial distribution maps to identify visual clustering; (3) spatial autocorrelation analysis using global Moran's I; (4) local clustering analysis using LISA to identify specific hot spots and cold spots; and (5) spatial outlier detection to identify areas whose values are anomalous relative to their neighbors.
+
+
+## 4.2 Moran's I: Theory and Implementation in Julia
+
+Moran's I is the foundational measure of global spatial autocorrelation, developed by Patrick Alfred Pierce Moran in 1950. The statistic measures the degree to which values at neighboring locations are correlated, after accounting for the overall mean of the variable. It is defined formally as:
+
+I = (N / W) × (Σᵢ Σⱼ wᵢⱼ (xᵢ - x̄)(xⱼ - x̄)) / (Σᵢ (xᵢ - x̄)²)
+
+where N is the number of spatial units, W is the sum of all spatial weights wᵢⱼ, xᵢ is the value of the variable at location i, and x̄ is the mean. The expected value under spatial randomness is -1/(N-1), which approaches zero for large N. Values significantly above this threshold indicate positive spatial autocorrelation (clustering); values significantly below indicate negative spatial autocorrelation (dispersion).
+
+Statistical inference for Moran's I is typically based on either a normal approximation (appropriate when the variable is approximately normally distributed) or a permutation test (more appropriate for health rates, which are often right-skewed or bounded). The permutation test randomly reassigns the observed values across spatial units a large number of times and compares the observed Moran's I to the permutation distribution to obtain an empirical p-value.
+
+```julia
+using LinearAlgebra, Statistics, DataFrames
+"""
+compute_morans_i(values, W; permutations=999)
+```
+
+Compute Global Moran's I with permutation-based inference.
+
+W should be row-standardized (rows sum to 1).
+
+Returns (I, z_score, p_value, expected_I)
+
+"""
+
+```julia
+function compute_morans_i(values::Vector{Float64}, W::Matrix{Float64};
+permutations::Int = 999)
+n = length(values)
+@assert size(W) == (n, n) "W must be n×n"
+# Row-standardize W
+```
+
+W_std = W ./ (sum(W; dims=2) .+ 1e-12)
+
+x_bar = mean(values)
+
+z = values .- x_bar
+
+denominator = sum(z.^2)
+
+denominator == 0.0 && return (0.0, 0.0, 1.0, -1/(n-1))
+
+```julia
+# Compute observed I
+```
+
+Wz = W_std * z
+
+I_obs = (n / sum(W_std)) * dot(z, Wz) / denominator
+
+```julia
+# Permutation test
+```
+
+I_perm = Vector{Float64}(undef, permutations)
+
+perm_vals = copy(values)
+
+for k in 1:permutations
+
+shuffle!(perm_vals)
+
+z_perm = perm_vals .- mean(perm_vals)
+
+Wz_perm = W_std * z_perm
+
+denom_perm = sum(z_perm.^2)
+
+I_perm[k] = (n / sum(W_std)) * dot(z_perm, Wz_perm) / denom_perm
+
+
+## 4.3 LISA: Local Indicators of Spatial Association
+
+```julia
+end
+# Empirical p-value (two-tailed)
+p_value = mean(abs.(I_perm) .>= abs(I_obs))
+z_score = (I_obs - mean(I_perm)) / std(I_perm)
+expected_I = -1.0 / (n - 1)
+return (I_obs, z_score, p_value, expected_I)
+end
+```
+
+Luc Anselin's Local Indicators of Spatial Association (LISA), published in 1995, extend the global Moran's I framework to produce location-specific measures of spatial autocorrelation. The local Moran's I for location i is defined as:
+
+Iᵢ = (xᵢ - x̄) / m₂ × Σⱼ wᵢⱼ (xⱼ - x̄)
+
+where m₂ = Σᵢ (xᵢ - x̄)² / N. Locations with a high positive local Moran's I are surrounded by similar values (either high-high or low-low clusters). Locations with a high negative local Moran's I are spatial outliers — a high value surrounded by low values (high-low) or a low value surrounded by high values (low-low). Statistical significance is assessed via permutation testing at each location. The resulting LISA cluster maps display four categories of significant locations: High-High hot spots (red), Low-Low cold spots (blue), High-Low spatial outliers (orange), and Low-High spatial outliers (light blue).
+
+In rural health analysis, LISA maps are particularly valuable for identifying priority areas for intervention. A cluster of high-high counties for cardiovascular mortality, physician shortage scores, or uninsurance rates identifies a region where multiple neighboring counties are simultaneously disadvantaged — making a strong case for regionally coordinated intervention rather than county-level patchwork solutions.
+
+
+## 4.4 The Two-Step Floating Catchment Area Method
+
+The Two-Step Floating Catchment Area (2SFCA) method is the standard approach for quantifying spatial accessibility to healthcare providers. It produces an accessibility score for each population unit that accounts for both provider supply (number and capacity of providers) and population demand (the number of people competing for those providers within a catchment area).
+
+The standard 2SFCA algorithm proceeds as follows. In Step 1, for each provider location j, a catchment area of radius d₀ is defined. The provider-to-population ratio Rⱼ within this catchment is computed as Rⱼ = Sⱼ / Σₖ∈{d_kj ≤ d₀} Pₖ, where Sⱼ is the provider supply (e.g., number of physicians) and Pₖ is the population at location k. In Step 2, for each population location i, a catchment area of radius d₀ is defined. The accessibility score Aᵢ is computed as the sum of Rⱼ for all providers j within the catchment: Aᵢ = Σⱼ∈{d_ij ≤ d₀} Rⱼ. Higher values of Aᵢ indicate better accessibility.
+
+"""
+
+two_step_fca(providers, pop_locs, catchment_km; decay_fn=nothing)
+
+Compute Enhanced 2SFCA accessibility scores.
+
+providers: DataFrame with columns :lat, :lon, :supply
+
+pop_locs:  DataFrame with columns :lat, :lon, :population, :id
+
+catchment_km: catchment radius in kilometers
+
+decay_fn: optional distance-decay function (d -> weight); default = step
+
+"""
+
+```julia
+function two_step_fca(providers::DataFrame, pop_locs::DataFrame,
+catchment_km::Float64;
+decay_fn::Union{Nothing, Function} = nothing)
+n_prov = nrow(providers)
+n_pop  = nrow(pop_locs)
+# Step 1: compute provider-to-population ratios
+```
+
+R = Vector{Float64}(undef, n_prov)
+
+for j in 1:n_prov
+
+pj = (providers.lat[j], providers.lon[j])
+
+total_pop = 0.0
+
+for k in 1:n_pop
+
+pk = (pop_locs.lat[k], pop_locs.lon[k])
+
+d = haversine(pj, pk)
+
+if d <= catchment_km
+
+w = isnothing(decay_fn) ? 1.0 : decay_fn(d)
+
+total_pop += w * pop_locs.population[k]
+
+```julia
+end
+end
+```
+
+R[j] = total_pop > 0 ? providers.supply[j] / total_pop : 0.0
+
+```julia
+end
+# Step 2: sum ratios for each population location
+```
+
+A = Vector{Float64}(undef, n_pop)
+
+for i in 1:n_pop
+
+pi = (pop_locs.lat[i], pop_locs.lon[i])
+
+acc = 0.0
+
+for j in 1:n_prov
+
+pj = (providers.lat[j], providers.lon[j])
+
+d = haversine(pi, pj)
+
+if d <= catchment_km
+
+w = isnothing(decay_fn) ? 1.0 : decay_fn(d)
+
+acc += w * R[j]
+
+```julia
+end
+end
+```
+
+A[i] = acc
+
+
+## 4.5 Geographically Weighted Regression in Julia
+
+```julia
+end
+return DataFrame(id = pop_locs.id, accessibility = A)
+end
+# Gaussian decay function
+gaussian_decay(sigma) = d -> exp(-0.5 * (d/sigma)^2)
+```
+
+Geographically Weighted Regression (GWR) is a spatial analytical technique developed by Brunsdon, Fotheringham, and Charlton in the late 1990s that allows regression coefficients to vary across space. Standard (global) regression assumes that the relationship between predictors and outcome is the same everywhere in the study area — an assumption that is frequently violated in health research. GWR relaxes this assumption by fitting a separate weighted regression at each spatial location, with weights defined by a kernel function that gives more weight to nearby observations.
+
+In healthcare applications, GWR reveals important spatial variation in the determinants of health outcomes. A GWR model of cardiovascular mortality might reveal that poverty is a stronger predictor in the rural Southeast than in the rural Midwest, or that primary care access is more strongly associated with outcomes in some regions than others. These spatially varying coefficients are as substantively important as the overall model fit.
+
+"""
+
+gwr(y, X, coords; bandwidth_km=50.0, kernel=:bisquare)
+
+Geographically Weighted Regression.
+
+y:     n-length response vector
+
+X:     n×p design matrix (include column of ones for intercept)
+
+coords: n×2 matrix of [lat lon] for each observation
+
+Returns DataFrame with local coefficients for each location.
+
+"""
+
+```julia
+function gwr(y::Vector{Float64}, X::Matrix{Float64},
+coords::Matrix{Float64};
+bandwidth_km::Float64 = 50.0,
+kernel::Symbol = :bisquare)
+n, p = size(X)
+coefs = Matrix{Float64}(undef, n, p)
+kernel_fn = if kernel == :bisquare
+(d, bw) -> d < bw ? (1 - (d/bw)^2)^2 : 0.0
+else  # gaussian
+(d, bw) -> exp(-0.5 * (d/bw)^2)
+end
+for i in 1:n
+# Compute distances from location i to all other locations
+w = Vector{Float64}(undef, n)
+for k in 1:n
+ci = (coords[i,1], coords[i,2])
+ck = (coords[k,1], coords[k,2])
+d = haversine(ci, ck)
+w[k] = kernel_fn(d, bandwidth_km)
+end
+```
+
+W = Diagonal(w)
+
+```julia
+# Weighted least squares: β = (X'WX)⁻¹ X'Wy
+```
+
+XtW = X' * W
+
+coefs[i, :] = (XtW * X) \ (XtW * y)
+
+```julia
+end
+col_names = [Symbol("beta_$(i)") for i in 1:p]
+return DataFrame(coefs, col_names)
+end
+```

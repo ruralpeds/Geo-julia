@@ -1,0 +1,103 @@
+---
+title: "Chapter 5: Defining and Studying Rural Populations"
+subtitle: "Volume 1 — Geographic Analysis in Julia: Healthcare and Rural Populations"
+---
+
+
+## 5.1 The Challenge of Defining Rural
+
+There is no single authoritative definition of rural in the United States — a fact that creates significant challenges for research, policy, and funding allocation. Different federal agencies use different definitions for different purposes, and these definitions do not always yield consistent classifications of the same geographic areas. Understanding the competing definitions, their rationale, and their implications for geographic analysis is essential for any researcher working in rural health.
+
+The multiplicity of rural definitions is not merely a bureaucratic inconvenience. Each definition operationalizes a different conceptual model of what makes a place rural: population density alone, commuting patterns, distance from urban centers, road network characteristics, or combinations thereof. The choice of definition affects which populations are classified as rural, which programs they are eligible for, and how research findings about rural health should be interpreted.
+
+
+## 5.2 Federal Rural Classification Systems
+
+
+### 5.2.1 Office of Management and Budget (OMB) Metro/Non-Metro
+
+The OMB's Core-Based Statistical Area (CBSA) delineations classify counties as metropolitan, micropolitan, or neither. Metropolitan areas contain a core urban area of 50,000 or more people. Micropolitan areas contain an urban core of at least 10,000 but fewer than 50,000 people. All counties that are not part of a CBSA are classified as rural. The OMB definition is simple to implement and widely used in health research, but it has well-known limitations: it classifies entire counties as urban or rural, even when counties contain large tracts of rural land or significant rural populations. The OMB delineation is updated approximately every 10 years following the decennial census.
+
+
+### 5.2.2 USDA Rural-Urban Continuum Codes (Beale Codes)
+
+The USDA Economic Research Service Rural-Urban Continuum Codes (also known as Beale codes) extend the OMB metro/non-metro dichotomy by classifying counties into nine categories that distinguish among metropolitan counties by population size and among non-metropolitan counties by degree of urbanization and adjacency to metropolitan areas. Codes 1-3 represent metropolitan counties of varying size, while codes 4-9 represent non-metropolitan counties ranging from large urban populations (code 4: urban population of 20,000+, adjacent to metro) to completely rural and remote (code 9: rural, not adjacent to metro). The Beale codes provide a more nuanced portrait of the rural-urban continuum and are widely used in health services research.
+
+
+### 5.2.3 USDA Rural-Urban Commuting Area (RUCA) Codes
+
+The Rural-Urban Commuting Area (RUCA) codes, developed by the USDA Economic Research Service in collaboration with the University of Washington, classify census tracts rather than counties based on urbanization, population density, and commuting patterns. RUCA codes range from 1 (metropolitan area core) to 10 (rural area with no commuting ties to urban areas). The FORHP definition of rural — the definition used for HRSA rural health grant eligibility — considers census tracts with RUCA codes 4-10 as rural when located in metropolitan counties, in addition to all non-metropolitan counties. The RUCA system was most recently updated by ERS in 2025 using 2020 Census data.
+
+For geographic analysis at the census tract level, RUCA codes are the most methodologically appropriate rural classification. They provide census tract-level resolution (over 85,000 tracts nationally), account for commuting patterns that capture the functional integration of rural areas with urban economies, and are the basis for federal rural health funding eligibility determination.
+
+
+### 5.2.4 FORHP Definition and Road Ruggedness Scale
+
+The Federal Office of Rural Health Policy (FORHP) definition combines the OMB non-metropolitan county classification with RUCA codes to classify census tracts. In September 2025, FORHP updated its definition to incorporate the Road Ruggedness Scale (RRS) — a measure developed by USDA ERS that quantifies the difficulty of travel through a census tract based on road network characteristics and terrain. Under the updated definition, FORHP considers as rural: all non-metropolitan counties; census tracts with RUCA codes 4-10 in metropolitan counties; census tracts of at least 400 square miles with population density ≤35 per square mile with RUCA codes 2-3 in metropolitan counties; and census tracts with RRS 5 and RUCA codes 2-3 that are at least 20 square miles in metropolitan counties. Based on 2020 Census data, FORHP considers 19.3% of the U.S. population (64.5 million people) and 87.7% of the land area of the country to be rural.
+
+
+## 5.3 Implementing Rural Classification in Julia
+
+```julia
+using DataFrames, CSV
+"""
+```
+
+Classify census tracts by rurality using FORHP criteria.
+
+Input DataFrame must include: fips, ruca_code, rrs_code,
+
+omb_metro_type ("metro", "micro", or "nonmetro"),
+
+area_sq_mi, population_density.
+
+"""
+
+
+## 5.4 Health Disparities Facing Rural Populations
+
+```julia
+function classify_rural_forhp(tracts::DataFrame)::DataFrame
+result = copy(tracts)
+result.is_rural_forhp = falses(nrow(tracts))
+for i in 1:nrow(tracts)
+r = tracts[i, :]
+# Rule 1: All non-metropolitan counties
+if r.omb_metro_type == "nonmetro"
+result.is_rural_forhp[i] = true
+continue
+end
+# Rules below apply to metro counties only
+if r.omb_metro_type != "metro"
+continue
+end
+# Rule 2: RUCA 4-10 in metro counties
+if r.ruca_code >= 4
+result.is_rural_forhp[i] = true
+continue
+end
+# Rule 3: Large sparse areas with RUCA 2-3
+if r.ruca_code in (2, 3) &&
+r.area_sq_mi >= 400.0 &&
+r.population_density <= 35.0
+result.is_rural_forhp[i] = true
+continue
+end
+# Rule 4: Rugged areas with RUCA 2-3 (RRS = 5, area >= 20 sq mi)
+if r.ruca_code in (2, 3) &&
+r.rrs_code == 5 &&
+r.area_sq_mi >= 20.0
+result.is_rural_forhp[i] = true
+end
+end
+return result
+end
+```
+
+Rural populations in the United States bear a disproportionate burden of chronic disease, premature mortality, and limited access to high-quality care. Understanding these disparities — their magnitude, geographic distribution, and determinants — is the primary scientific motivation for rural health geographic analysis.
+
+Mortality from cardiovascular disease, cancer, chronic lower respiratory disease, stroke, and unintentional injury is higher in rural areas than in urban areas, and the rural-urban mortality gap has widened over the past two decades for several of these conditions. Rural residents have higher rates of obesity, diabetes, hypertension, and cigarette smoking — risk factors for the leading causes of premature death. Age-adjusted mortality rates for opioid overdose, suicide, and motor vehicle accidents are substantially higher in rural areas, contributing to a persistent rural disadvantage in life expectancy.
+
+Healthcare access is a major driver of rural health disparities. Rural areas are disproportionately affected by Health Professional Shortage Areas (HPSAs) — geographic areas, population groups, or facilities with a shortage of primary care, dental, or mental health providers. As of late 2024, 66% of all primary care geographic HPSAs were located in rural areas. Rural hospitals — particularly Critical Access Hospitals (CAHs) — have experienced sustained financial pressure, with over 180 rural hospital closures since 2010 and over 400 additional rural hospitals at risk of closure. When a rural hospital closes, its catchment population loses access to emergency services, obstetric care, and a range of specialty services that cannot be practically obtained through outpatient visits alone.
+
+Maternal health disparities in rural areas deserve specific attention from geospatial analysts. Rural counties have higher rates of severe maternal morbidity and maternal mortality than urban counties, a disparity that has grown over time as the rural obstetric care infrastructure has eroded. Between 2010 and 2018, the proportion of rural counties with hospital-based obstetric care declined from 53% to 43% — meaning that more than half of all rural counties now have no hospital that offers labor and delivery services. The geographic analysis of obstetric access deserts — defined as counties with no hospital providing labor and delivery care and no obstetric provider — is an active area of research with direct implications for rural health policy.

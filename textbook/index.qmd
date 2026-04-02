@@ -1,0 +1,95 @@
+---
+title: "Geographic Analysis in Julia"
+subtitle: "Healthcare, Rural Populations, and Spatial Data Science"
+---
+
+## Welcome {.unnumbered}
+
+This is a comprehensive four-volume textbook series on geographic analysis using the **Julia programming language**, with a focus on healthcare applications, rural population health, and spatial epidemiology.
+
+The series was generated from a Claude Sonnet 4.6 session on 2026-03-30 and covers 34 chapters spanning foundational GIS theory through production deployment of spatial analysis web services.
+
+---
+
+## Series Overview {.unnumbered}
+
+| Volume | Title | Chapters | Topics |
+|--------|-------|----------|--------|
+| **I** | Geographic Analysis in Julia: Healthcare and Rural Populations | 1–10 | Foundations, JuliaGeo ecosystem, spatial statistics, rural health, data sources |
+| **II** | Gap Analysis and Open Population Data | 11–15 | What Julia lacks vs Python/R, Bayesian disease mapping, population data directory |
+| **III** | Package Engineering: Building the Missing Ecosystem | 16–25 | Building SpatialStats.jl, Geocode.jl, SpatialReg.jl from scratch |
+| **IV** | Advanced Methods, Real Data, and Deployment | 26–34 | Point patterns, GLMs, real pipelines, Pluto dashboards, Genie.jl web services, GPU |
+
+---
+
+## Packages Specified {.unnumbered}
+
+Six production Julia packages are designed and fully specified throughout this series:
+
+| Package | Purpose | Volume |
+|---------|---------|--------|
+| `SpatialStats.jl` | Moran's I, LISA, G\*, spatial regression | III |
+| `Geocode.jl` | Address geocoding (Census, Nominatim) | III |
+| `MapClassify.jl` | 15 choropleth classification schemes | III |
+| `SpatialReg.jl` | Spatial Lag/Error/Durbin models via ML | III |
+| `PointPatterns.jl` | K-function, scan statistic, intensity estimation | IV |
+| `Overpass.jl` | OpenStreetMap Overpass API client | III |
+
+---
+
+## Key Data Sources {.unnumbered}
+
+- **HRSA** — FORHP rural areas, HPSA designations, Area Health Resources File
+- **Census Bureau** — ACS 5-year, Decennial 2020, TIGER/Line boundaries
+- **USDA ERS** — RUCA codes (2025), Road Ruggedness Scale
+- **CDC** — WONDER mortality, Social Vulnerability Index, BRFSS
+- **WorldPop** — 100m gridded population 2015–2030 (CC BY 4.0)
+- **GHSL** — Global Human Settlement Layer (EU JRC)
+- **LandScan** — Ambient population, USA high-resolution (ORNL)
+- **Kontur** — H3 hexagonal population (quarterly)
+
+---
+
+## How to Use This Book {.unnumbered}
+
+**Practitioners** (clinicians, public health analysts) should start with Chapters 1–7 for geographic theory and data sources, then Chapter 9 for visualization.
+
+**Julia developers** new to geospatial work should read Chapters 2–3 first, then jump to the chapter most relevant to their task.
+
+**Package developers** building the Julia geospatial ecosystem should work through Volumes II and III sequentially.
+
+**Researchers** implementing specific methods can navigate directly to:
+
+- Moran's I / LISA → Chapter 18
+- Spatial regression → Chapter 20
+- Bayesian disease mapping → Chapter 12
+- 2SFCA accessibility → Chapter 4 and 29
+- Point pattern analysis → Chapter 26
+
+---
+
+## Technical Requirements {.unnumbered}
+
+```julia
+# Julia 1.9+ required
+# Core packages used throughout:
+using ArchGDAL, GeoDataFrames, GeoInterface, Shapefile
+using Rasters, GeoStats, GeoMakie, CairoMakie
+using Turing, DataFrames, CSV, HTTP
+using Statistics, LinearAlgebra, SparseArrays
+using Pluto, PlutoUI  # interactive dashboards
+```
+
+Install all dependencies by activating the project environment in the repository root:
+
+```julia
+using Pkg
+Pkg.activate(".")
+Pkg.instantiate()
+```
+
+---
+
+*Generated 2026-03-30 | Claude Sonnet 4.6 | Repository: [timothyhartzog/geo-julia](https://github.com/timothyhartzog/geo-julia)*
+
+*Rural healthcare geographic analysis — because where you live should not determine whether you live.*
