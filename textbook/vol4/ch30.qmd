@@ -1,0 +1,96 @@
+---
+title: "Chapter 30: Interactive Dashboards with Pluto.jl"
+subtitle: "Volume 4 — Advanced Methods, Real Data, and Deployment"
+---
+
+
+## 30.1 The Pluto Reactive Programming Model
+
+Pluto.jl implements reactive notebooks where every cell is automatically re-executed when any cell it depends on changes. This is fundamentally different from Jupyter notebooks where cells execute only when manually run. For spatial analysis dashboards, Pluto's reactivity enables genuine interactivity: changing a slider that controls a catchment radius automatically re-runs the 2SFCA calculation and redraws the map in real time — without any event handler code. This section builds a complete interactive rural healthcare access dashboard.
+
+```julia
+# === notebooks/healthcare_dashboard.jl ===
+# Run with: julia -e 'using Pluto; Pluto.run(notebook="healthcare_dashboard.jl")'
+### Cell 1: Package loading (Pluto handles deps automatically) ###
+begin
+using Pluto, PlutoUI
+using WGLMakie, GeoMakie
+using DataFrames, CSV, Shapefile
+using SpatialStats
+md"""## 🏥 North Dakota Primary Care Access Dashboard"""
+end
+### Cell 2: Interactive controls ###
+begin
+catchment_slider = @bind catchment_km Slider(20:5:80; default=45, show_value=true)
+alpha_slider     = @bind alpha_val Slider(0.01:0.01:0.10; default=0.05, show_value=true)
+var_select       = @bind selected_var Select([
+"access_score"   => "E2SFCA Access Score",
+"poverty_pct"    => "Poverty Rate (%)",
+"uninsured_pct"  => "Uninsurance Rate (%)",
+"lisa_cluster"   => "LISA Clusters",
+])
+md"""
+| Parameter | Control |
+|-----------|---------|
+| Catchment radius (km) | $(catchment_slider) |
+| LISA significance (α) | $(alpha_slider) |
+| Map variable | $(var_select) |
+"""
+end
+### Cell 3: Reactive analysis (re-runs when sliders change) ###
+# Pluto detects that this cell depends on catchment_km and alpha_val
+analysis = let
+@info "Recomputing with catchment=$(catchment_km)km, α=$(alpha_val)"
+run_spatial_analysis(nd_df; catchment=catchment_km, alpha=alpha_val)
+end
+### Cell 4: Reactive map (re-renders when analysis or var_select changes) ###
+let
+fig = Figure(resolution=(900, 600))
+ax  = GeoAxis(fig[1,1];
+dest  = "+proj=laea +lat_0=47 +lon_0=-100",
+title = "$(var_select) — Catchment: $(catchment_km)km")
+if selected_var == "lisa_cluster"
+cmap = Dict(:HH=>:red,:LL=>:blue,:HL=>:orange,:LH=>:lightblue,:NS=>:lightgray)
+colors = [cmap[c] for c in analysis.nd_df.lisa_cluster]
+poly!(ax, analysis.nd_df.geom; color=colors,
+strokecolor=:white, strokewidth=0.3)
+# Add cluster count annotation
+counts = cluster_counts(analysis.lisa)
+text!(ax, "HH: $(counts[:HH])  LL: $(counts[:LL])";
+position=(-104.0, 45.9), fontsize=12, color=:black)
+else
+vals = Float64.(coalesce.(analysis.nd_df[!, Symbol(selected_var)], 0.0))
+poly!(ax, analysis.nd_df.geom;
+color=vals, colormap=:viridis,
+strokecolor=:white, strokewidth=0.3)
+```
+
+Colorbar(fig[1,2]; colormap=:viridis, limits=extrema(vals), width=15)
+
+```julia
+end
+fig
+end
+### Cell 5: Statistical summary table ###
+let
+mr = analysis.moran_results
+DataFrame(
+```
+
+Variable = ["Access Score", "Poverty Rate", "Uninsurance Rate"],
+
+Moran_I  = round.([mr[:access_score].I, mr[:poverty_pct].I, mr[:uninsured_pct].I]; digits=4),
+
+Z_Score  = round.([mr[:access_score].z_score, mr[:poverty_pct].z_score,
+
+mr[:uninsured_pct].z_score]; digits=2),
+
+P_Value  = round.([mr[:access_score].p_value, mr[:poverty_pct].p_value,
+
+mr[:uninsured_pct].p_value]; digits=4)
+
+)
+
+```julia
+end
+```

@@ -1,0 +1,51 @@
+---
+title: "Chapter 6: State of the Art: Rural Health Geographic Analysis"
+subtitle: "Volume 1 — Geographic Analysis in Julia: Healthcare and Rural Populations"
+---
+
+
+## 6.1 Recent Advances in Spatial Epidemiology for Rural Health
+
+The past decade has seen significant methodological advancement in the geographic analysis of rural health outcomes, driven by three parallel developments: the availability of new high-resolution spatial data sources, advances in spatial statistical methods, and the adoption of high-performance computing tools that make previously intractable analyses feasible at scale.
+
+The integration of electronic health record (EHR) data with spatial analysis represents a particularly important frontier. EHR data, when de-identified and geocoded, provides unprecedented resolution on disease burden, treatment patterns, and outcomes — data that was previously only available at the county level through public surveillance systems. However, the geocoding of EHR data raises important privacy challenges, particularly in rural settings where small populations mean that even ZIP code-level data can be re-identifiable.
+
+Machine learning approaches to spatial prediction have begun to complement traditional geostatistical methods. Random forests, gradient boosting, and deep learning models have been applied to predict rural health outcomes from spatially distributed predictor variables, often outperforming traditional regression approaches on prediction tasks. Geographically-aware neural network architectures that explicitly model spatial autocorrelation as an inductive bias represent an active research frontier.
+
+
+## 6.2 Healthcare Access Desert Research
+
+Access deserts — geographic areas where populations have effectively no practical access to a specific category of healthcare services — have become a major focus of rural health geographic analysis. The concept extends beyond simple provider shortage designation to capture the interaction of provider supply, travel distance, financial barriers, and population need.
+
+Research on obstetric access deserts has documented that nearly 5 million U.S. women of reproductive age live in counties with no hospital obstetric care and no obstetric provider (ob-gyn or certified nurse midwife). These obstetric deserts are heavily concentrated in rural areas and are associated with higher rates of adverse birth outcomes, including preterm birth, low birth weight, and maternal morbidity. The geographic analysis of obstetric deserts has employed both the 2SFCA method and gravity-based accessibility models, and has been used to evaluate the impact of rural hospital closure on obstetric access.
+
+Mental health access deserts represent another critical research area. Rural areas have substantially fewer psychiatrists, psychologists, and licensed counselors per capita than urban areas, and this shortage has worsened in the context of the national mental health crisis. Geographic analysis has documented that rural residents in mental health deserts have higher rates of suicide, substance use disorder, and psychiatric emergency department visits — suggesting that geographic access barriers translate directly into adverse outcomes.
+
+Primary care access deserts are defined operationally using HPSA designation criteria but have also been studied using continuous accessibility measures from 2SFCA methods. Research has documented a strong spatial correlation between primary care access deserts and higher rates of preventable hospitalizations — conditions where timely primary care could have prevented hospital admission — providing empirical support for the hypothesis that access barriers cause downstream harm.
+
+
+## 6.3 Network Analysis and Travel Time Modeling
+
+A major methodological advance in rural health geographic analysis is the shift from Euclidean (straight-line) distance measures to network-based travel time measures. The limitation of Euclidean distance is most acute in rural settings, where road networks are sparse and indirect, travel may involve mountain passes or river crossings that substantially lengthen drive time, and there is essentially no public transit. Studies comparing Euclidean distance to drive time for rural healthcare access have consistently found that Euclidean distance substantially underestimates travel burdens for rural populations.
+
+Network-based travel time modeling in Julia can be implemented using OpenStreetMapX.jl, which provides functionality for parsing, routing, and computing shortest paths on OpenStreetMap road network data. The Open Source Routing Machine (OSRM) API, accessible via HTTP, provides routing calculations at scale and can be used for batch accessibility analysis. For large-scale analysis, the R5 routing engine (used via the r5r package in R) provides multi-modal routing that accounts for transit, walking, and cycling in addition to driving.
+
+
+## 6.4 Social Determinants of Health and Geographic Analysis
+
+Geographic analysis of the social determinants of health (SDOH) has become a central component of rural health research, motivated by the recognition that healthcare access explains only a small fraction of geographic variation in health outcomes. Place-based SDOH — the characteristics of neighborhoods and communities that shape health independently of individual-level risk factors — are highly spatially structured and require geographic methods for their analysis.
+
+The CDC's Social Vulnerability Index (SVI), USDA's Rural Opportunity Index, and the Robert Wood Johnson Foundation's County Health Rankings each provide composite measures of place-based disadvantage that can be integrated with provider access measures, health outcome data, and environmental exposure data in multivariate spatial models. These composite indices reveal the ways in which health disparities in rural areas reflect not merely healthcare access deficits but the broader geography of poverty, environmental degradation, educational disadvantage, and housing insecurity.
+
+The USDA ERS Food Environment Atlas, which maps food access, food stores, and food assistance programs at the county level, enables geographic analysis of rural food insecurity as a determinant of diet-related chronic disease. Counties classified as food deserts — defined as low-income communities with limited proximity to a grocery store — are more prevalent in rural areas and overlap substantially with HPSA designations, reinforcing the concept of cumulative geographic disadvantage.
+
+
+## 6.5 Geospatial AI and Machine Learning for Rural Health
+
+The application of artificial intelligence and machine learning to geospatial rural health analysis is an emerging frontier with significant potential. Several methodological developments warrant attention.
+
+Deep learning approaches to aerial image analysis can identify built-environment characteristics — road quality, housing density, business activity, green space — from satellite imagery at spatial resolutions not available in traditional survey data. These extracted features have been used as predictors of rural health outcomes in regression models and have revealed environmental determinants of health that are invisible in traditional administrative datasets.
+
+Spatial cross-validation is a critical methodological consideration when applying machine learning to spatial health data. Standard cross-validation randomly partitions observations into training and test sets, producing optimistic performance estimates when there is spatial autocorrelation in the data (as nearby observations in the training and test sets will have correlated errors). Spatial cross-validation — which partitions observations into spatially contiguous blocks — provides unbiased performance estimates for spatial prediction problems and is essential for evaluating geospatial machine learning models applied to health outcomes.
+
+Graph neural networks (GNNs) represent perhaps the most technically sophisticated current approach to spatial health analysis. By representing counties or census tracts as nodes in a graph, with edges connecting neighboring areas, GNNs can learn spatial interaction patterns from the data rather than imposing them through a pre-specified spatial weights matrix. GNNs have been applied to predict hospital readmission rates, chronic disease prevalence, and healthcare utilization at the county level.

@@ -1,0 +1,306 @@
+---
+title: "Chapter 14: Building the Missing Packages — A Community Roadmap"
+subtitle: "Volume 2 — Gap Analysis and Open Population Data"
+---
+
+
+## 14.1 The Case for a Julia Spatial Statistics Package
+
+The most urgent gap in Julia's geospatial ecosystem is the absence of a spatial statistics and spatial econometrics package equivalent to PySAL's spreg or R's spatialreg. This section provides a complete architecture and implementation plan for a hypothetical SpatialStats.jl package that would close this gap.
+
+
+### 14.1.1 SpatialStats.jl: Architecture and API Design
+
+A production-quality spatial statistics package for Julia should follow three design principles: (1) it should use Julia's multiple dispatch system to provide a unified interface that works across different geometry types and data structures; (2) it should use SparseArrays throughout to handle large spatial weights matrices efficiently; (3) it should integrate with the Tables.jl ecosystem so that any tabular data structure (DataFrames, NamedArrays, etc.) can be used with its functions.
+
+```julia
+# === SpatialStats.jl: Proposed API Design ===
+# This outlines the target API for a community package effort
+module SpatialStats
+# ── Types ─────────────────────────────────────────────────────
+""" Spatial weights matrix wrapper with metadata """",
+struct SpatialWeights
+```
+
+W::SparseMatrixCSC{Float64, Int}
+
+n::Int
+
+style::Symbol          # :B (binary), :W (row-std), :C (global-std)
+
+transform::Symbol      # :queen, :rook, :knn, :distance
+
+island_count::Int      # areas with no neighbors
+
+mean_neighbors::Float64
+
+```julia
+end
+""" Container for Moran's I test result """",
+struct MoranResult
+```
+
+I::Float64             # Observed statistic
+
+expected_I::Float64    # Expected under null
+
+variance::Float64
+
+z_score::Float64
+
+p_value::Float64
+
+alternative::Symbol    # :two_tailed, :greater, :less
+
+method::Symbol         # :normal, :permutation, :analytical
+
+```julia
+end
+""" Container for LISA result """",
+struct LISAResult
+```
+
+I_local::Vector{Float64}   # Local Moran's I per unit
+
+p_values::Vector{Float64}
+
+cluster_type::Vector{Symbol}  # :HH, :LL, :HL, :LH, :NS
+
+significance::Float64
+
+```julia
+end
+""" Container for spatial regression result """",
+struct SpatialRegResult
+model_type::Symbol      # :OLS, :SLM, :SEM, :SDM
+coefficients::NamedTuple
+rho_or_lambda::Float64  # spatial parameter
+log_likelihood::Float64
+```
+
+AIC::Float64
+
+BIC::Float64
+
+lm_tests::NamedTuple    # LM-lag, LM-error diagnostics
+
+residuals::Vector{Float64}
+
+fitted::Vector{Float64}
+
+
+### 14.1.2 Phase 1 Implementation: Core Autocorrelation (6 weeks)
+
+```julia
+end
+# ── Constructor functions ─────────────────────────────────────
+# Build weights from geometry column of a DataFrame/GeoDataFrame
+queen_weights(df; transform=:W)  = SpatialWeights(...)
+rook_weights(df; transform=:W)   = SpatialWeights(...)
+knn_weights(df, k; transform=:W) = SpatialWeights(...)
+distance_weights(df, threshold)  = SpatialWeights(...)
+# ── Analysis functions ────────────────────────────────────────
+# Global autocorrelation
+moran(y, w::SpatialWeights; method=:permutation, permutations=999)
+geary(y, w::SpatialWeights; method=:permutation, permutations=999)
+getis_ord(y, w::SpatialWeights; star=true)
+# Local autocorrelation
+lisa(y, w::SpatialWeights; permutations=999, alpha=0.05)
+g_local(y, w::SpatialWeights; permutations=999, alpha=0.05)
+# Spatial regression
+lm_spatial(y, X, w::SpatialWeights)     # OLS with spatial diagnostics
+slm(y, X, w::SpatialWeights)            # Spatial Lag Model
+sem(y, X, w::SpatialWeights)            # Spatial Error Model
+sdm(y, X, w::SpatialWeights)            # Spatial Durbin Model
+gwr(y, X, coords, bandwidth; kernel=:bisquare)
+end  # module
+```
+
+The minimum viable SpatialStats.jl implementation should focus on: (1) the SpatialWeights type and its constructors from polygon geometries; (2) global Moran's I with both analytical and permutation-based inference; (3) LISA (local Moran's I) with permutation inference and cluster classification; and (4) Getis-Ord G* hotspot analysis. These four capabilities cover the majority of exploratory spatial analysis needs for healthcare researchers.
+
+→ ROADMAP  PHASE 1 (Weeks 1-6): SpatialWeights constructors, Moran's I, LISA, G* hotspots
+
+PHASE 2 (Weeks 7-14): Spatial Lag Model and Spatial Error Model via ML estimation
+
+PHASE 3 (Weeks 15-24): Spatial Durbin Model, GWR, spatial GLMs (Poisson/NegBin)
+
+PHASE 4 (Weeks 25-36): Point pattern analysis, disease mapping utilities, spatial CV
+
+PARALLEL: Geocode.jl (address → coordinates via Census, Nominatim, Google APIs)
+
+
+## 14.2 Bridging Julia to Python and R: Interoperability Strategies
+
+While waiting for native Julia spatial statistics packages, the most pragmatic approach is to use Julia's excellent Python and R interoperability packages to call mature implementations in other languages for specific tasks where Julia lacks native capability.
+
+```julia
+# === PyCall.jl: Call PySAL from Julia for spatial regression ===
+# Install: ] add PyCall; ENV["PYTHON"] = "/path/to/python"; Pkg.build("PyCall")
+using PyCall
+# Import PySAL's spreg module
+spreg = pyimport("spreg")
+libpysal_weights = pyimport("libpysal.weights")
+numpy = pyimport("numpy")
+"""
+```
+
+Estimate Spatial Lag Model via PySAL from Julia.
+
+y, X: Julia arrays (auto-converted to numpy)
+
+W: SparseMatrixCSC or Matrix from Julia weights computation
+
+"""
+
+```julia
+function pysal_spatial_lag(y::Vector{Float64}, X::Matrix{Float64},
+```
+
+W::Matrix{Float64})
+
+```julia
+# Convert Julia W to PySAL weights object
+# PySAL's W takes a Dict mapping each id to its neighbor ids and weights
+n = size(W, 1)
+neighbors = Dict(i-1 => [j-1 for j in 1:n if W[i,j] > 0]
+for i in 1:n)
+w_pysal = libpysal_weights.W(neighbors)
+w_pysal.transform = "R"  # row-standardize
+# Run spatial lag model
+model = spreg.GM_Lag(
+numpy.array(reshape(y, :, 1)),
+numpy.array(X),
+w = w_pysal,
+name_y = "outcome",
+name_x = ["x$(i)" for i in 1:size(X,2)]
+)
+# Extract results back to Julia
+return (
+rho     = model.rho,
+betas   = vec(model.betas),
+std_err = vec(model.std_err),
+pr2     = model.pr2,
+aic     = model.aic,
+)
+end
+# === RCall.jl: Call spdep from Julia for spatial tests ===
+using RCall
+"""
+```
+
+Run Lagrange Multiplier spatial dependence tests via R's spdep.
+
+"""
+
+```julia
+function r_lm_tests(y::Vector{Float64}, X::Matrix{Float64}, W::Matrix{Float64})
+@rput y X W
+R"""
+library(spdep)
+# Create sparse listw object from dense W matrix
+```
+
+W_list <- mat2listw(W, style='W')
+
+
+## 14.3 Claude Code Specifications: Package Development
+
+```julia
+# OLS residuals
+mod <- lm(y ~ X)
+# LM tests for spatial dependence
+lmt <- lm.LMtests(mod, listw=W_list,
+test=c('LMlag','LMerr','RLMlag','RLMerr'))
+results <- as.data.frame(sapply(lmt, function(x) c(x$statistic, x$p.value)))
+"""
+@rget results
+return results
+end
+# CLAUDE CODE SPECIFICATION: SpatialStats.jl Bootstrap
+# File: specs/11_spatial_stats_package.md
+## Task
+```
+
+Initialize a new Julia package called SpatialStats.jl that will become
+
+the Julia equivalent of PySAL's esda and spreg modules.
+
+This is a greenfield package creation, not a modification of existing code.
+
+## Step 1: Generate Package Scaffold
+
+```
+
+julia -e 'import Pkg; Pkg.generate("SpatialStats")'
+
+```
+
+## Step 2: Project.toml Dependencies
+
+Add: SparseArrays (stdlib), LinearAlgebra (stdlib), Statistics (stdlib),
+
+DataFrames, GeoInterface, GeoDataFrames, Distributions, Optim, Turing,
+
+NearestNeighbors, BenchmarkTools, Test
+
+## Step 3: Implement SpatialWeights type
+
+Create src/weights/SpatialWeights.jl.
+
+Implement the struct as shown in Chapter 14.1.1.
+
+Implement queen_weights() constructor using GeoInterface.intersects().
+
+Implement knn_weights() constructor using NearestNeighbors.jl.
+
+Implement normalize!() to row-standardize the sparse weights matrix.
+
+Test with 50 synthetic polygons; verify row sums == 1.0.
+
+## Step 4: Implement Moran's I
+
+Create src/autocorrelation/morans.jl.
+
+Implement compute_morans_i() returning a MoranResult struct.
+
+Support both :analytical and :permutation inference methods.
+
+Permutation method must use shuffle!() in-place to avoid allocation.
+
+Target: 10,000 permutations on n=3,000 in < 10 seconds on M-series Mac.
+
+## Step 5: Implement LISA
+
+Create src/autocorrelation/lisa.jl.
+
+Implement lisa() returning a LISAResult struct.
+
+Permutation test must be location-specific (random reassignment at each i).
+
+Cluster classification: HH (z_i > 0, lag_i > 0), LL (<0, <0),
+
+HL (>0, <0), LH (<0, >0), NS (not significant).
+
+Add a plot_lisa() function using GeoMakie to render LISA cluster map.
+
+## Step 6: Tests
+
+Write test cases for:
+
+- Perfect clustering input → Moran's I ≈ 1.0
+
+- Checkerboard pattern → Moran's I ≈ -1.0
+
+- Random permutation of values → |I| < 0.1
+
+- LISA HH correctly identified on synthetic 5-cluster data
+
+- queen_weights returns correct neighbor counts for a 5x5 grid
+
+## Step 7: Documentation
+
+Write Documenter.jl docstrings for all exported functions.
+
+Create a tutorial notebook demonstrating SpatialStats.jl on
+
+North Dakota county CVD mortality data using AHRF + Census TIGER.

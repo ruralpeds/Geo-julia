@@ -1,0 +1,59 @@
+---
+title: "Appendices A–C: Package Reference, Data Dictionary, Glossary"
+subtitle: "Volume 1 — Geographic Analysis in Julia: Healthcare and Rural Populations"
+---
+
+
+# Appendix A: Key Julia Package Reference
+
+
+# Appendix B: Data Dictionary — FORHP Rural Designation File
+
+The following table describes key variables in the FORHP rural designation data file, available at hrsa.gov/rural-health/about-us/what-is-rural/data-files.
+
+
+# Appendix C: Glossary of Geospatial and Rural Health Terms
+
+2SFCA: Two-Step Floating Catchment Area: a method for measuring spatial accessibility to healthcare services that accounts for provider supply, population demand, and travel distance.
+
+AHRF: Area Health Resources Files: HRSA dataset with 6,000+ county-level variables on health workforce, facilities, and socioeconomics.
+
+Beale Codes: USDA Rural-Urban Continuum Codes: a 9-category county classification system for the rural-urban continuum.
+
+CAH: Critical Access Hospital: a rural hospital designation under the Medicare Rural Hospital Flexibility Program providing enhanced Medicare reimbursement.
+
+Choropleth Map: A thematic map in which areas are shaded in proportion to the value of a statistical variable.
+
+ESDA: Exploratory Spatial Data Analysis: descriptive and visual methods for detecting spatial patterns before model fitting.
+
+FIPS: Federal Information Processing Standard: standardized codes for U.S. geographic units (states: 2 digits; counties: 5 digits; tracts: 11 digits).
+
+FORHP: Federal Office of Rural Health Policy: HRSA office that administers rural health policy and grants.
+
+GWR: Geographically Weighted Regression: regression technique allowing coefficients to vary spatially.
+
+HPSA: Health Professional Shortage Area: HRSA designation for areas with insufficient primary care, dental, or mental health providers.
+
+LISA: Local Indicators of Spatial Association: location-specific measures of spatial autocorrelation (Anselin 1995).
+
+MAUP: Modifiable Areal Unit Problem: statistical bias arising from the choice of geographic aggregation unit.
+
+Moran's I: The standard measure of global spatial autocorrelation, ranging from -1 to +1.
+
+MUA: Medically Underserved Area: HRSA designation for areas with insufficient primary care relative to need.
+
+OSRM: Open Source Routing Machine: high-performance routing engine for OpenStreetMap road network data.
+
+RUCA: Rural-Urban Commuting Area codes: census-tract level rurality classification by USDA ERS.
+
+RRS: Road Ruggedness Scale: USDA ERS measure of road network difficulty based on terrain.
+
+SVI: Social Vulnerability Index: CDC composite measure of community resilience to external stressors.
+
+TIGER: Topologically Integrated Geographic Encoding and Referencing: U.S. Census Bureau geographic boundary files.
+
+Tobler's First Law: Everything is related to everything else, but near things are more related than distant things.
+
+Variogram: A geostatistical tool describing how spatial dependence changes with distance.
+
+ZCTA: ZIP Code Tabulation Area: Census Bureau's geographic approximation of postal ZIP code areas.

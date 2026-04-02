@@ -1,0 +1,252 @@
+---
+title: "Chapter 18: Full Implementation — Moran's I, LISA, and Getis-Ord G*"
+subtitle: "Volume 3 — Package Engineering: Building the Missing Ecosystem"
+---
+
+
+## 18.1 Production Moran's I with Both Inference Methods
+
+```julia
+# === src/autocorr/global.jl ===
+"""
+moran(values, w; method=:permutation, permutations=999, alternative=:two_tailed)
+```
+
+Compute Global Moran's I statistic for spatial autocorrelation.
+
+```julia
+# Arguments
+- `values`:       Variable to test for spatial autocorrelation
+- `w`:            SpatialWeights object
+- `method`:       `:permutation` (nonparametric) or `:analytical` (normal approx)
+- `permutations`: Number of Monte Carlo permutations (for :permutation method)
+- `alternative`:  `:two_tailed`, `:greater` (positive SA), `:less` (negative SA)
+# Returns
+```
+
+Named tuple with fields: I, expected_I, variance, z_score, p_value, method
+
+```julia
+# References
+```
+
+Moran, P.A.P. (1950). Notes on continuous stochastic phenomena.
+
+Biometrika, 37(1-2), 17-23.
+
+```julia
+# Example
+```julia
+w = queen_weights(counties.geometry)
+result = moran(counties.cvd_rate, w)
+println(\"Moran's I = $(result.I), p = $(result.p_value)\")
+```
+"""
+function moran(
+values::AbstractVector{<:Real},
+w::AbstractSpatialWeights;
+method::Symbol        = :permutation,
+permutations::Int     = 999,
+alternative::Symbol   = :two_tailed,
+rng::AbstractRNG      = Random.default_rng()
+)
+# Input validation — fail fast with informative messages
+n = nobs(w)
+length(values) == n ||
+throw(DimensionMismatch(
+"values has length $(length(values)), weights has $(n) units"))
+any(isnan, values) &&
+throw(ArgumentError("values contains NaN — remove missing before calling moran()"))
+n > 1 || throw(ArgumentError("Need at least 2 observations"))
+x = Float64.(values)
+return _moran_impl(x, w, Val(method), permutations, Val(alternative), rng)
+end
+# ── Permutation-based inference ──────────────────────────────
+function _moran_impl(
+x::Vector{Float64},
+w::AbstractSpatialWeights,
+::Val{:permutation},
+permutations::Int,
+::Val{alt},
+rng::AbstractRNG
+) where {alt}
+n     = nobs(w)
+x̄     = mean(x)
+z     = x .- x̄
+denom = dot(z, z)
+denom ≈ 0 && return MoranResult(0.0, -1/(n-1), 0.0, 0.0, 1.0, :permutation)
+```
+
+S0    = sum(w.W)
+
+Wz    = w.W * z
+
+I_obs = (n / S0) * dot(z, Wz) / denom
+
+```julia
+# Monte Carlo permutation distribution
+```
+
+I_perm = Vector{Float64}(undef, permutations)
+
+x_perm = copy(x)
+
+z_perm = similar(z)
+
+```julia
+@inbounds for k in 1:permutations
+shuffle!(rng, x_perm)     # Random spatial reassignment
+z_perm .= x_perm .- mean(x_perm)
+d_perm  = dot(z_perm, z_perm)
+```
+
+Wz_perm = w.W * z_perm
+
+I_perm[k] = (n / S0) * dot(z_perm, Wz_perm) / d_perm
+
+```julia
+end
+```
+
+E_I = mean(I_perm)
+
+V_I = var(I_perm)
+
+z_score = (I_obs - E_I) / sqrt(V_I)
+
+
+## 18.2 Full LISA Implementation with Cluster Mapping
+
+```julia
+# One- or two-tailed empirical p-value
+p_value = if alt == :two_tailed
+mean(abs.(I_perm) .>= abs(I_obs))
+elseif alt == :greater
+mean(I_perm .>= I_obs)
+else  # :less
+mean(I_perm .<= I_obs)
+end
+# Add 1/permutations as continuity correction (Anselin convention)
+p_corrected = min(1.0, p_value + 1.0/permutations)
+return MoranResult(I=I_obs, expected_I=E_I, variance=V_I,
+z_score=z_score, p_value=p_corrected,
+method=:permutation)
+end
+# === src/autocorr/local.jl ===
+"""
+moran_local(values, w; permutations=999, alpha=0.05)
+```
+
+Local Indicators of Spatial Association (LISA) — Anselin (1995).
+
+Returns location-specific Moran statistics and cluster classifications.
+
+```julia
+# Returns LISAResult with fields:
+- `I_local`:      n-vector of local Moran statistics
+- `p_values`:     n-vector of permutation p-values
+- `cluster`:      n-vector of Symbols: :HH, :LL, :HL, :LH, :NS
+- `z_scores`:     n-vector of standardized local I
+- `significance`: threshold alpha used
+# Cluster types:
+- HH (High-High): high value surrounded by high neighbors → hot spot
+- LL (Low-Low):   low value surrounded by low neighbors → cold spot
+- HL (High-Low):  high value surrounded by low neighbors → outlier
+- LH (Low-High):  low value surrounded by high neighbors → outlier
+- NS:             not statistically significant at alpha
+"""
+function moran_local(
+values::AbstractVector{<:Real},
+w::AbstractSpatialWeights;
+permutations::Int   = 999,
+alpha::Float64      = 0.05,
+rng::AbstractRNG    = Random.default_rng()
+)
+n = nobs(w)
+length(values) == n ||
+throw(DimensionMismatch("values length $(length(values)) ≠ n=$(n)"))
+x  = Float64.(values)
+x̄  = mean(x)
+z  = x .- x̄
+m2 = dot(z, z) / n          # Variance of z (for standardization)
+m2 ≈ 0 && return _constant_lisa(n, alpha)
+# ── Observed local Moran statistics ──────────────────────
+# I_i = (z_i / m2) * Σ_j w_ij * z_j
+lag_z  = w.W * z             # Spatial lag of z
+```
+
+I_local = (z ./ m2) .* lag_z
+
+```julia
+# ── Permutation test: location-specific ──────────────────
+# For each location i, we permute values at ALL OTHER locations
+# keeping z_i fixed. This is the standard LISA permutation.
+p_values = ones(Float64, n)
+```
+
+I_perm_i = Vector{Float64}(undef, permutations)
+
+z_perm   = similar(z)
+
+```julia
+@inbounds for i in 1:n
+zi_fixed = z[i]
+for k in 1:permutations
+# Permute all values except i
+copyto!(z_perm, z)
+# Swap z[i] to position 1 for efficient exclusion
+other_idx = [j for j in 1:n if j != i]
+shuffle!(rng, view(z_perm, other_idx))
+# z_perm[i] stays as zi_fixed; neighbors get permuted
+# Compute local lag for location i only
+nbrs = neighbors(w, i)
+nwts = neighbor_weights(w, i)
+lag_i = dot(nwts, z_perm[nbrs])
+```
+
+I_perm_i[k] = (zi_fixed / m2) * lag_i
+
+```julia
+end
+# Two-tailed empirical p-value for location i
+p_values[i] = mean(abs.(I_perm_i) .>= abs(I_local[i]))
+end
+# ── Cluster classification ────────────────────────────────
+cluster = fill(:NS, n)
+lag_x   = w.W * x            # Spatial lag of original values
+@inbounds for i in 1:n
+p_values[i] < alpha || continue  # Skip non-significant
+hi_val  = x[i]     >= x̄
+hi_lag  = lag_x[i] >= x̄
+cluster[i] = if hi_val && hi_lag;   :HH
+elseif !hi_val && !hi_lag; :LL
+elseif hi_val && !hi_lag;  :HL
+else                        :LH
+end
+end
+return LISAResult(
+```
+
+I_local   = I_local,
+
+p_values  = p_values,
+
+cluster   = cluster,
+
+z_scores  = I_local ./ std(I_local),
+
+significance = alpha
+
+)
+
+```julia
+end
+# ── Convenience: count clusters ───────────────────────────────
+cluster_counts(r::LISAResult) = Dict(
+:HH => count(==(:HH), r.cluster),
+:LL => count(==(:LL), r.cluster),
+:HL => count(==(:HL), r.cluster),
+:LH => count(==(:LH), r.cluster),
+:NS => count(==(:NS), r.cluster)
+)
+```

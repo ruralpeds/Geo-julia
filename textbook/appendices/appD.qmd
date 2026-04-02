@@ -1,0 +1,22 @@
+---
+title: "Appendix D: Open Data Sources Master Directory"
+subtitle: "Volume 2 — Gap Analysis and Open Population Data"
+---
+
+
+# Appendix D: Open Data Sources Master Directory — Rural and Population Health
+
+This appendix provides a comprehensive reference directory of open-access data sources for rural and population health geographic analysis, including URL, license, geographic coverage, primary variables, and Julia access method for each source.
+
+
+# Closing: The Future of Julia for Healthcare Geographic Analysis
+
+Julia occupies a distinctive and valuable position in the geospatial computing landscape. It offers near-C performance for computational geospatial operations, a growing ecosystem of well-designed packages in JuliaGeo and JuliaEarth, native support for the mathematical operations most important in spatial statistics, and a package ecosystem that makes implementing new methods from scratch both feasible and rewarding.
+
+The gaps identified in this volume — spatial regression, geocoding, point pattern analysis, network download automation — are real and consequential for production healthcare analysis workflows. But they are engineering gaps, not scientific ones. Every method described as missing has a clear path to Julia implementation, and the language itself imposes no barriers. The question is community investment.
+
+For the rural healthcare analyst building systems today, the recommended posture is: use Julia natively for everything it does well — raster analysis, accessibility calculation, custom statistical methods, visualization, and report generation — and use PyCall or RCall bridges strategically for the specific capabilities where Python and R have established, validated implementations that have not yet been ported. Build your bridges as thin and well-defined as possible so they can be replaced by native Julia implementations as the ecosystem matures.
+
+The rural populations whose health depends on the accuracy and timeliness of geographic analysis deserve the best available tools. Julia, thoughtfully applied within its current capabilities and with clear awareness of its limitations, is already capable of producing world-class rural health GIS analysis. The ecosystem is rapidly improving. The community is active and growing. The scientific trajectory is toward a unified, high-performance, open-source Julia geospatial stack that will rival and in many domains exceed what Python and R currently provide.
+
+END — Volume II Supplement — Geographic Analysis in Julia: Gap Analysis and Open Population Data — 2026 Edition

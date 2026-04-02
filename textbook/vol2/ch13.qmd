@@ -1,0 +1,357 @@
+---
+title: "Chapter 13: Open-Source Population Data — A Complete Directory"
+subtitle: "Volume 2 — Gap Analysis and Open Population Data"
+---
+
+
+## 13.1 The Population Data Landscape
+
+Accurate population data is the denominator for virtually every healthcare rate, access measure, and epidemiological indicator. Knowing where people live — their geographic distribution, demographic composition, and temporal trends — is prerequisite to computing provider-to-population ratios, accessibility scores, disease rates, and service utilization rates. The past decade has seen an explosion in the availability of high-resolution, open-access population datasets, driven by satellite imagery analysis, machine learning-based population modeling, and the progressive digitization of census data worldwide.
+
+For rural health analysis in the United States, the U.S. Census Bureau's decennial census and American Community Survey remain the gold standard for administrative population data. However, several gridded population datasets provide complementary capabilities — particularly the ability to estimate population at sub-county resolutions without relying on political boundaries, and to study populations in areas where administrative data are suppressed due to small cell sizes. Understanding the strengths, limitations, and known biases of each data source is essential for using them appropriately in health research.
+
+⚠ GAP  CRITICAL KNOWN BIAS: All major global gridded population datasets systematically
+
+underestimate rural populations. A 2025 PMC study found negative biases ranging from
+
+-53% (WorldPop) to -84% (GHS-POP) when validated against rural resettlement census data.
+
+For rural health analysis, these biases directly affect access denominators and coverage estimates.
+
+Always validate against Census Bureau ACS data for U.S. applications.
+
+
+## 13.2 U.S.-Specific Population Data Sources
+
+
+### 13.2.1 U.S. Census Bureau: Decennial Census and American Community Survey
+
+The U.S. Census Bureau's decennial census and five-year American Community Survey (ACS) are the most accurate and comprehensive population data sources available for U.S. health research. The decennial census attempts a complete enumeration of the U.S. population every 10 years (2000, 2010, 2020) and provides data at the block level — the finest geographic resolution in the U.S. statistical system, typically corresponding to a city block. The ACS provides rolling five-year estimates of detailed demographic and socioeconomic characteristics at the census tract level, updated annually.
+
+
+### 13.2.2 Implementing a Julia Census Data Client
+
+A tidycensus-equivalent for Julia would substantially lower the barrier to Census data access. The following implementation provides a production-quality Census API client covering the most common use cases for healthcare GIS.
+
+```julia
+# === CensusData.jl: A tidycensus-inspired Julia module ===
+# Save as src/data/census_client.jl
+module CensusClient
+using HTTP, JSON, DataFrames, CSV
+export get_acs, get_decennial, get_pop_estimates, list_variables
+const CENSUS_BASE = "https://api.census.gov/data"
+"""
+get_acs(variables; geography, state, county=nothing,
+year=2022, survey="acs5", api_key=ENV["CENSUS_API_KEY"])
+```
+
+Fetch ACS estimates analogous to R's tidycensus::get_acs().
+
+geography: "tract", "county", "state", "block group", "zcta"
+
+variables: Vector of ACS variable codes (e.g. ["B01001_001E"])
+
+OR a Dict mapping code => friendly_name
+
+"""
+
+```julia
+function get_acs(variables;
+geography::String,
+state::String,
+county::Union{String,Nothing}=nothing,
+year::Int=2022,
+survey::String="acs5",
+geometry::Bool=true,
+api_key::String=get(ENV,"CENSUS_API_KEY",""))
+var_codes = variables isa Dict ? collect(keys(variables)) : variables
+var_str   = join(["NAME"; var_codes], ",")
+geo_spec = if geography == "tract"
+isnothing(county) ?
+"for=tract:*&in=state:$(state)" :
+"for=tract:*&in=state:$(state)%20county:$(county)"
+elseif geography == "county"
+"for=county:*&in=state:$(state)"
+elseif geography == "zcta"
+"for=zip%20code%20tabulation%20area:*"
+else
+"for=$(replace(geography,' '=>'%20')):*&in=state:$(state)"
+end
+url = "$(CENSUS_BASE)/$(year)/acs/$(survey)" *
+"?get=$(var_str)&$(geo_spec)" *
+(isempty(api_key) ? "" : "&key=$(api_key)")
+resp = HTTP.get(url)
+resp.status == 200 || error("Census API error $(resp.status): $(String(resp.body))")
+raw = JSON.parse(String(resp.body))
+headers = Symbol.(raw[1])
+df = DataFrame([Dict(headers[j] => raw[i][j] for j in 1:length(headers))
+for i in 2:length(raw)])
+# Build GEOID
+df.GEOID = if geography == "tract"
+rpad.(df.state,2,"0") .* rpad.(df.county,3,"0") .* lpad.(df.tract,6,"0")
+elseif geography == "county"
+rpad.(df.state,2,"0") .* rpad.(df.county,3,"0")
+else
+coalesce.(get.(Ref(df), :"zip code tabulation area", missing), missing)
+end
+# Rename variables if Dict provided
+if variables isa Dict
+for (code, name) in variables
+sym = Symbol(code)
+haskey(df, sym) && rename!(df, sym => Symbol(name))
+end
+end
+df
+end
+# Convenience wrapper: get uninsurance data by state
+function get_insurance_coverage(state_fips::String; year::Int=2022)
+get_acs(
+```
+
+Dict("B27001_001E" => "total_pop",
+
+"B27010_017E" => "uninsured_19to25",
+
+"B27010_033E" => "uninsured_26to34",
+
+"B27010_050E" => "uninsured_35to64");
+
+geography="tract", state=state_fips, year=year)
+
+
+### 13.2.3 USDA Economic Research Service Population and Rural Data
+
+```julia
+end
+end  # module CensusClient
+```
+
+The USDA Economic Research Service (ERS) maintains several datasets essential for rural population analysis beyond the RUCA codes already discussed. The ERS Atlas of Rural and Small-Town America provides interactive maps and downloadable county-level data on people, jobs, agriculture, and wellbeing across four thematic areas. The ERS Food Environment Atlas maps food access, food stores, and food assistance programs. The ERS County-level Data Sets provide downloadable data on poverty, education, employment, and rural-urban classification at the county level.
+
+
+## 13.3 Global Gridded Population Datasets
+
+
+### 13.3.1 WorldPop
+
+WorldPop, developed at the University of Southampton, produces high-resolution gridded population estimates using a 'top-down' methodology that disaggregates administrative unit population counts to 100-meter grid cells. The 2025 release (R2025A) provides annual population estimates from 2015 through 2030 at 100m resolution for 242 countries, broken down by gender and five-year age groups. WorldPop uses a Random Forest dasymetric approach that incorporates building footprints from satellite imagery, land cover data, road networks, and other geospatial covariates to distribute population within administrative boundaries. The 2025 dataset incorporates the latest circa-2020 round of censuses and is available under CC BY 4.0.
+
+For U.S. rural health research, WorldPop has limited direct utility because the Census Bureau provides far higher quality population data at the block group level. WorldPop's main value for U.S. applications is as a comparison dataset for validating accessibility analyses, as a source for sub-county population distribution within very large rural census tracts where Census data may be coarsely aggregated, and as the standard global reference for international health geography comparisons.
+
+A critical limitation is that WorldPop systematically underestimates rural populations. A 2025 PMC study validating global gridded population datasets against 307 large dam resettlement censuses in 35 countries found a -53% negative bias in WorldPop for rural areas — meaning that even the most accurate global dataset predicts less than half the actual rural population in the validation areas. This finding has direct implications for accessibility analysis in rural settings: if the population denominator is underestimated by 50%, provider-to-population ratios will be overstated, and access deserts will appear less severe than they actually are.
+
+
+### 13.3.2 Global Human Settlement Layer (GHSL)
+
+The Global Human Settlement Layer (GHSL) is produced by the European Commission Joint Research Centre. The GHS-POP dataset provides residential population estimates from 1975 through 2020 in five-year intervals, with projections to 2025 and 2030, at 100-meter resolution. Population estimates are derived by disaggregating CIESIN GPWv4.11 census data using the GHSL built-up surface layer (GHS-BUILT-S) as the dasymetric model — population is distributed only to areas with identified buildings. The 2023 release (P2023A) incorporates advanced satellite-based building detection at global scale.
+
+GHSL data is freely available from the JRC website and is also accessible via Google Earth Engine. For Julia users, the Rasters.jl package can directly read GeoTIFF files downloaded from JRC. The GHSL project also provides the GHS-SMOD (Degree of Urbanization) dataset, which classifies grid cells into urban centers, urban clusters, and rural areas using a standardized global methodology — providing an alternative to RUCA codes for international comparisons of rural health.
+
+
+### 13.3.3 LandScan
+
+LandScan, produced by Oak Ridge National Laboratory (ORNL), provides ambient (24-hour average) population distribution at approximately 1-kilometer resolution, updated annually. Unlike residential population estimates that capture where people sleep, LandScan models where people are on average throughout the day — incorporating commuting patterns, employment locations, and temporal population movement. This makes LandScan particularly appropriate for healthcare access analysis that should reflect daytime exposure, such as workplace emergency response or occupational health facility access.
+
+LandScan data from 2000 through 2023 is available under Creative Commons Attribution 4.0, accessed via the ORNL DAAC. The data is provided as GeoTIFF raster files downloadable at no cost after registration. For Julia, these files are read directly with Rasters.jl.
+
+
+### 13.3.4 Kontur Population Dataset
+
+The Kontur Population Dataset is a relatively new global gridded population product that uses H3 hexagonal spatial indexing (at resolution 8, ~0.74 km² cells) rather than rectangular raster grids. It combines building footprint data from Microsoft/Google AI satellite analysis, Facebook/Meta High Resolution Settlement Layer (HRSL), and census data to estimate population at ~92-meter resolution globally. Kontur updates approximately quarterly and provides data as GeoPackage (.gpkg) files or via Web API.
+
+For Julia users, Kontur data can be read via ArchGDAL.jl's GeoPackage support. The H3 hexagonal grid structure is particularly interesting for healthcare accessibility analysis because hexagonal grids avoid the edge artifacts that affect rectangular grids in accessibility calculations, and the consistent cell area (unlike administrative boundaries) simplifies spatial statistical comparisons.
+
+```julia
+# === Loading and using Kontur Population Data in Julia ===
+using ArchGDAL, DataFrames, GeoInterface
+"""
+```
+
+Load Kontur population dataset for a specific country/region.
+
+Download from: data.humdata.org/organization/kontur
+
+File format: GeoPackage (.gpkg) with H3 hexagonal grid
+
+"""
+
+```julia
+function load_kontur(filepath::String; state_filter=nothing)
+```
+
+ArchGDAL.read(filepath) do dataset
+
+layer = ArchGDAL.getlayer(dataset, 0)
+
+n = ArchGDAL.nfeature(layer)
+
+ids, pops, geoms = String[], Float64[], []
+
+ArchGDAL.resetreading!(layer)
+
+for feat in layer
+
+push!(ids,  ArchGDAL.getfield(feat, "h3"))
+
+push!(pops, Float64(ArchGDAL.getfield(feat, "population")))
+
+push!(geoms, GeoInterface.convert(
+
+ArchGDAL.IGeometry,
+
+ArchGDAL.getgeom(feat)))
+
+
+### 13.3.5 High Resolution Settlement Layer (HRSL) / Meta AI
+
+```julia
+end
+df = DataFrame(h3_id=ids, population=pops, geometry=geoms)
+return df
+end
+end
+# === H3 Spatial Aggregation (requires H3.jl or manual calculation) ===
+# Aggregate Kontur hex cells to county level via spatial join
+function aggregate_kontur_to_counties(kontur_df, county_geoms, county_ids)
+# For each Kontur hex, find containing county
+county_pop = Dict(id => 0.0 for id in county_ids)
+for row in eachrow(kontur_df)
+centroid = GeoInterface.centroid(row.geometry)
+for (cid, cgeom) in zip(county_ids, county_geoms)
+if GeoInterface.contains(cgeom, centroid)
+county_pop[cid] += row.population
+break
+end
+end
+end
+return county_pop
+end
+```
+
+The High Resolution Settlement Layer (HRSL), developed by Meta (Facebook) AI Research and CIESIN, uses deep learning applied to DigitalGlobe satellite imagery to identify building footprints globally at 1-meter resolution, then distributes census population counts to those footprints. The original HRSL covered approximately 140 countries. Meta has continued to release improved versions as part of its broader AI for Good initiatives.
+
+For rural healthcare analysis, HRSL/Meta AI population data is particularly valuable for disaggregating administrative population counts to actual settlement locations — a critical input for computing point-based accessibility measures that should reflect where people actually live rather than administrative centroids. In rural areas, the administrative centroid of a large county or census tract may be dozens of kilometers from the actual population cluster, making centroid-based accessibility calculations substantially misleading.
+
+
+## 13.4 Specialized Population Datasets for Healthcare Analysis
+
+
+### 13.4.1 LandScan USA
+
+LandScan USA is a separate, higher-resolution product from ORNL that provides both daytime and nighttime population estimates at approximately 90-meter resolution for the conterminous United States. Unlike the global LandScan product, LandScan USA incorporates American Community Survey data, land use, parcel data, and dasymetric mapping to achieve substantially higher accuracy within the U.S. LandScan USA provides both residential (nighttime) and ambient (daytime) population surfaces, making it particularly valuable for analyses that distinguish between where people live and where they are during the workday. LandScan USA is available through the ORNL DAAC after registration.
+
+
+### 13.4.2 CMS Medicare and Medicaid Beneficiary Data
+
+The Centers for Medicare and Medicaid Services (CMS) Geographic Variation Public Use File provides county-level statistics on Medicare fee-for-service beneficiaries, including utilization rates, per-capita spending, chronic condition prevalence, and demographic composition. This data enables denominator-corrected analysis of rural Medicare populations — a critical capability since rural areas have older age distributions and higher Medicare enrollment rates than urban areas. CMS also provides the Atlas of Rural and Small-Town America in partnership with the USDA ERS.
+
+
+### 13.4.3 Behavioral Risk Factor Surveillance System (BRFSS)
+
+The CDC's Behavioral Risk Factor Surveillance System (BRFSS) is the world's largest ongoing telephone health survey, collecting state-level data on U.S. residents' health-related risk behaviors, chronic health conditions, and use of preventive services. While the primary unit of analysis is the state, BRFSS data can be analyzed at the county level using small area estimation methods (multilevel regression and poststratification, or MrP) that combine BRFSS microdata with Census demographic data to produce county-level estimates of health behaviors.
+
+The County-Level BRFSS Estimates project, published periodically by the CDC, provides pre-computed county-level estimates of 27 health indicators including obesity, diabetes, smoking, physical inactivity, and preventive care utilization. These are available as downloadable CSV files and can be joined to county shapefiles for geographic analysis.
+
+
+## 13.5 Population Data Access in Julia: A Complete API Client Library
+
+```julia
+# === PopulationData.jl: Unified population data access module for Julia ===
+module PopulationData
+using HTTP, JSON, CSV, DataFrames, Rasters, GeoDataFrames
+export download_worldpop, download_ghsl, download_landscan,
+download_kontur, load_population_raster, pop_by_polygon
+const DATA_DIR = joinpath(homedir(), ".julia_geodata", "population")
+"""
+download_worldpop(country_iso3, year; resolution="1km")
+```
+
+Download WorldPop constrained population raster.
+
+country_iso3: e.g. "USA", "MEX"
+
+year: 2015-2020 (historical) or 2021-2030 (projected)
+
+resolution: "1km" or "100m" (100m only available for 2020)
+
+"""
+
+```julia
+function download_worldpop(country_iso3::String, year::Int;
+resolution::String="1km")
+iso_lower = lowercase(country_iso3)
+base = "https://data.worldpop.org/GIS/Population/Global_2000_2020"
+filename = "$(iso_lower)_ppp_$(year)_$(resolution)_Aggregated_UNadj.tif"
+url = "$(base)/$(year)/$(uppercase(country_iso3))/$(filename)"
+dest = joinpath(DATA_DIR, "worldpop", filename)
+mkpath(dirname(dest))
+isfile(dest) && return dest
+@info "Downloading WorldPop $(country_iso3) $(year) ($(resolution))..."
+resp = HTTP.get(url; readtimeout=600, progress=true)
+write(dest, resp.body)
+@info "Saved to $(dest)"
+return dest
+end
+"""
+download_ghsl(year; resolution=100)
+```
+
+Download Global Human Settlement Layer population raster (GHS-POP R2023A).
+
+year: 1975, 1980, 1985, 1990, 1995, 2000, 2005, 2010, 2015, 2020, 2025, 2030
+
+resolution: 100 (meters), 1000
+
+Note: GHSL files require registration at ghsl.jrc.ec.europa.eu
+
+"""
+
+```julia
+function download_ghsl(year::Int; resolution::Int=100)
+res_str = resolution == 100 ? "R2023A_4326_100" : "R2023A_4326_1000"
+base = "https://jeodpp.jrc.ec.europa.eu/ftp/jrc-opendata/GHSL"
+filename = "GHS_POP_E$(year)_GLOBE_$(res_str)_V1_0.tif"
+url = "$(base)/GHS_POP_GLOBE_R2023A/GHS_POP_E$(year)_GLOBE_$(res_str)_V1_0/V1-0/$(filename)"
+dest = joinpath(DATA_DIR, "ghsl", filename)
+mkpath(dirname(dest))
+isfile(dest) && return dest
+@info "Downloading GHSL $(year) $(resolution)m — file may be large (>1 GB)"
+resp = HTTP.get(url; readtimeout=1800)
+write(dest, resp.body)
+return dest
+end
+"""
+pop_by_polygon(raster_path, polygons_df; stat=sum)
+```
+
+Zonal statistics: compute population total within each polygon.
+
+Uses Rasters.jl zonal function with mask approach.
+
+polygons_df must have a :geometry column.
+
+Returns Vector{Float64} with one value per polygon.
+
+"""
+
+
+## 13.6 Comparing Population Data Sources for Rural Health Applications
+
+```julia
+function pop_by_polygon(raster_path::String, polygons_df::DataFrame;
+stat::Function = sum)
+rast = Raster(raster_path; missingval=-9999.0f0)
+results = Float64[]
+for row in eachrow(polygons_df)
+try
+masked = Rasters.mask(rast; with=row.geometry)
+vals = filter(!ismissing, vec(masked))
+push!(results, isempty(vals) ? 0.0 : stat(Float64.(vals)))
+catch
+push!(results, 0.0)
+end
+end
+return results
+end
+end  # module PopulationData
+```

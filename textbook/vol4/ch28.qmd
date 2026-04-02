@@ -1,0 +1,224 @@
+---
+title: "Chapter 28: Bivariate and Advanced Cartography in Julia"
+subtitle: "Volume 4 — Advanced Methods, Real Data, and Deployment"
+---
+
+
+## 28.1 Bivariate Choropleth Maps
+
+Bivariate choropleth maps encode two variables simultaneously using a 3×3 or 4×4 color grid, revealing the spatial co-occurrence of paired phenomena. For rural health analysis, classical bivariate maps show the joint distribution of poverty and uninsurance, provider shortage and adverse outcomes, or access score and disease burden. These maps are analytically powerful because they reveal whether high-need areas (high disease burden) are also low-resource areas (low provider supply) — the defining characteristic of a healthcare desert.
+
+```julia
+# === Bivariate choropleth mapping in GeoMakie.jl ===
+using GeoMakie, CairoMakie, Statistics
+"""
+bivariate_map(geoms, var1, var2;
+title1, title2, outfile, k=3)
+```
+
+Create a bivariate choropleth map encoding two variables as a k×k color matrix.
+
+Standard k=3 gives a 9-color 3×3 grid (Steven's bivariate scheme).
+
+```julia
+# Color encoding (3×3 example):
+#   Low-Low (var1 low, var2 low) = light grey
+#   High-High (both high) = dark purple
+#   High var1 only = blue; High var2 only = orange
+"""
+function bivariate_map(
+geoms,
+var1::Vector{Float64},
+var2::Vector{Float64};
+title1::String = "Variable 1",
+title2::String = "Variable 2",
+outfile::String = "bivariate_map.pdf",
+k::Int = 3,
+projection::String = "+proj=laea +lat_0=45 +lon_0=-96"
+)
+# ── Classify each variable into k quantile classes ────────
+classify_quantile(v, k) = begin
+q = quantile(v, range(0, 1; length=k+1))
+[searchsortedfirst(q, vi) |> x -> min(x, k) for vi in v]
+end
+c1 = classify_quantile(var1, k)  # 1..k
+c2 = classify_quantile(var2, k)  # 1..k
+# ── Build bivariate color palette ─────────────────────────
+# Joshua Stevens bivariate palette (3×3): row=var1, col=var2
+bivariate_palette_3x3 = [
+"#e8e8e8" "#ace4e4" "#5ac8c8";   # Low var1
+"#dfb0d6" "#a5add3" "#5698b9";   # Mid var1
+"#be64ac" "#8c62aa" "#3b4994"    # High var1
+]
+color_for(i1, i2) = parse(RGBf, bivariate_palette_3x3[i1, i2])
+colors = [color_for(c1[i], c2[i]) for i in 1:length(geoms)]
+# ── Draw map ──────────────────────────────────────────────
+fig = Figure(resolution=(1400, 900))
+ax  = GeoAxis(fig[1, 1];
+dest  = projection,
+title = "Bivariate: $(title1) × $(title2)",
+titlefont = :bold)
+poly!(ax, geoms; color=colors, strokecolor=:white, strokewidth=0.3)
+# ── Draw bivariate legend ─────────────────────────────────
+ax_legend = Axis(fig[1, 2];
+width=100, height=100,
+xlabel=title1, ylabel=title2,
+xlabelsize=11, ylabelsize=11,
+aspect=1)
+for r in 1:k, c in 1:k
+poly!(ax_legend,
+```
+
+Rect((r-1)/k, (c-1)/k, 1/k, 1/k);
+
+color=parse(RGBf, bivariate_palette_3x3[r,c]),
+
+strokecolor=:white, strokewidth=0.5)
+
+
+## 28.2 Dot Density Maps for Rural Population Distribution
+
+```julia
+end
+hidedecorations!(ax_legend; label=false)
+save(outfile, fig; pt_per_unit=1)
+@info "Bivariate map saved to $(outfile)"
+end
+```
+
+Dot density maps represent population by placing one dot for every N people, randomly distributed within each geographic unit. They avoid the perceptual distortion of choropleth maps where large rural counties appear more important than small dense urban ones. For rural health analysis, dot density maps are ideal for showing where population is actually located relative to healthcare facilities, because they correctly represent the sparseness of rural populations.
+
+```julia
+# === Dot density map generation ===
+using GeoMakie, CairoMakie, Random, GeoInterface
+"""
+dot_density_map(geoms, populations;
+dots_per_person=1000, rng=MersenneTwister(42))
+```
+
+Generate random dot positions for dot density map.
+
+Each dot represents dots_per_person people.
+
+Dots are uniformly distributed within each polygon's bounding box
+
+then filtered to inside the polygon.
+
+"""
+
+
+## 28.3 Cartogram Generation
+
+```julia
+function dot_density_map(
+geoms,
+populations::Vector{<:Real};
+dots_per_person::Int = 1000,
+rng::AbstractRNG     = MersenneTwister(42),
+projection::String   = "+proj=laea +lat_0=45 +lon_0=-96",
+dot_color            = :navy,
+dot_size::Float64    = 1.5,
+outfile::String      = "dot_density.pdf"
+)
+all_x = Float64[]
+all_y = Float64[]
+for (geom, pop) in zip(geoms, populations)
+n_dots = max(1, round(Int, pop / dots_per_person))
+coords = GeoInterface.coordinates(geom)
+# Bounding box for rejection sampling
+all_coords = [pt for ring in coords for pt in ring]
+xs = [c[1] for c in all_coords]
+ys = [c[2] for c in all_coords]
+xmin, xmax = extrema(xs)
+ymin, ymax = extrema(ys)
+placed = 0
+attempts = 0
+max_attempts = n_dots * 20  # Safety limit
+while placed < n_dots && attempts < max_attempts
+px = xmin + rand(rng) * (xmax - xmin)
+py = ymin + rand(rng) * (ymax - ymin)
+# Test if point is inside polygon (ray casting)
+if GeoInterface.contains(geom, GeoInterface.Point([px, py]))
+push!(all_x, px)
+push!(all_y, py)
+placed += 1
+end
+attempts += 1
+end
+end
+# Draw map
+fig = Figure(resolution=(1400, 900))
+ax  = GeoAxis(fig[1,1]; dest=projection,
+title="Population Dot Density (1 dot = $(dots_per_person) people)")
+poly!(ax, geoms; color=:white, strokecolor=:grey60, strokewidth=0.3)
+scatter!(ax, all_x, all_y;
+color=dot_color, markersize=dot_size, alpha=0.6)
+save(outfile, fig; pt_per_unit=1)
+@info "$(length(all_x)) dots placed in $(outfile)"
+end
+```
+
+Cartograms distort geographic area in proportion to a data variable — population, disease burden, or healthcare spending. They correct the visual bias of standard maps where large rural counties dominate the display despite having fewer people. Two cartogram algorithms are widely used: the Gastner-Newman diffusion cartogram (continuous, requires PDE solver) and the Dorling cartogram (non-overlapping circles scaled by variable). Julia implements the Dorling cartogram through iterative circle placement.
+
+```julia
+# === Dorling cartogram: non-overlapping circles scaled by population ===
+using LinearAlgebra
+"""
+dorling_cartogram(centroids, values, geoms;
+iterations=100, friction=0.25)
+```
+
+Compute Dorling cartogram positions using iterative force-directed layout.
+
+Circle areas are proportional to `values` (e.g. county population).
+
+Returns updated centroid positions after circle overlap resolution.
+
+"""
+
+```julia
+function dorling_cartogram(
+centroids::Matrix{Float64},  # n×2 [x y] centroid positions
+values::Vector{Float64},
+geoms;
+iterations::Int    = 100,
+friction::Float64  = 0.25,
+max_radius::Float64 = nothing
+)
+n    = size(centroids, 1)
+# Radius proportional to sqrt(value) (area ∝ value)
+scale = isnothing(max_radius) ?
+0.4 * mean(norm.(eachrow(diff(extrema(centroids; dims=1)[1], extrema(centroids;dims=1)[2])))) / sqrt(maximum(values)) :
+max_radius / sqrt(maximum(values))
+radii = scale .* sqrt.(values)
+pos   = copy(centroids)  # Mutable positions
+vel   = zeros(n, 2)      # Velocities
+for iter in 1:iterations
+forces = zeros(n, 2)
+for i in 1:n
+for j in (i+1):n
+dx    = pos[i,1] - pos[j,1]
+dy    = pos[i,2] - pos[j,2]
+dist  = sqrt(dx^2 + dy^2)
+r_sum = radii[i] + radii[j]
+if dist < r_sum && dist > 1e-10
+# Repulsion force proportional to overlap
+overlap   = r_sum - dist
+magnitude = overlap / dist
+forces[i,1] += magnitude * dx
+forces[i,2] += magnitude * dy
+forces[j,1] -= magnitude * dx
+forces[j,2] -= magnitude * dy
+end
+end
+# Attraction toward original centroid (prevents drift)
+forces[i,1] += friction * (centroids[i,1] - pos[i,1])
+forces[i,2] += friction * (centroids[i,2] - pos[i,2])
+end
+# Damped velocity update
+vel  .= 0.5 .* vel .+ forces
+pos  .+= 0.1 .* vel
+end
+return (positions=pos, radii=radii)
+end
+```

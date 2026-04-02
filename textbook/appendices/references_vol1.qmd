@@ -1,0 +1,55 @@
+---
+title: "References — Volume I"
+subtitle: "Volume 1 — Geographic Analysis in Julia: Healthcare and Rural Populations"
+---
+
+
+# References
+
+Primary literature, documentation, and data sources consulted in the preparation of this textbook. All U.S.-based sources.
+
+1. Anselin, L. (1995). Local indicators of spatial association—LISA. Geographical Analysis, 27(2), 93–115.
+
+2. Anselin, L. (1988). Spatial Econometrics: Methods and Models. Dordrecht: Kluwer Academic Publishers.
+
+3. Brunsdon, C., Fotheringham, A.S., & Charlton, M.E. (1996). Geographically weighted regression: a method for exploring spatial nonstationarity. Geographical Analysis, 28(4), 281–298.
+
+4. Centers for Disease Control and Prevention. CDC WONDER: Wide-ranging Online Data for Epidemiologic Research. wonder.cdc.gov. Accessed 2026.
+
+5. Centers for Disease Control and Prevention, Agency for Toxic Substances and Disease Registry. (2022). CDC/ATSDR Social Vulnerability Index. Atlanta, GA: CDC.
+
+6. Drez, D.N., et al. (2023). Rural-urban disparities in health outcomes, clinical care, health behaviors, and social determinants of health. PLOS Global Public Health, 3(10), e0002420.
+
+7. Federal Office of Rural Health Policy (FORHP). (2025). How We Define Rural. Health Resources and Services Administration. hrsa.gov/rural-health/about-us/what-is-rural.
+
+8. Federal Office of Rural Health Policy. (2025). FORHP Eligible Areas Data Files. hrsa.gov/rural-health/about-us/what-is-rural/data-files. September 2025 update using 2025 RUCA and RRS data.
+
+9. Health Resources and Services Administration. Area Health Resources Files (AHRF). data.hrsa.gov/topics/health-workforce/nchwa/ahrf. Accessed 2026.
+
+10. Health Resources and Services Administration. Health Professional Shortage Area (HPSA) Data Files. data.hrsa.gov. Accessed 2026.
+
+11. JuliaGeo Organization. JuliaGeo: Geospatial Computing in Julia. juliageo.org. GitHub: github.com/JuliaGeo. Accessed 2026.
+
+12. Hoffimann, J. et al. Geospatial Data Science with Julia. juliaearth.github.io/geospatial-data-science-with-julia. Open source textbook, JuliaEarth organization.
+
+13. Luo, W., & Wang, F. (2003). Measures of spatial accessibility to health care in a GIS environment: synthesis and a case study in the Chicago region. Environment and Planning B, 30(6), 865–884.
+
+14. Moran, P.A.P. (1950). Notes on continuous stochastic phenomena. Biometrika, 37(1-2), 17–23.
+
+15. National Center for Health Statistics. National Vital Statistics System. cdc.gov/nchs/nvss. Accessed 2026.
+
+16. Rekow, L., et al. (2025). Geospatial Data Analysis for Identifying and Addressing Health Inequities in Rural America. ResearchGate preprint.
+
+17. Tobler, W. (1970). A computer movie simulating urban growth in the Detroit region. Economic Geography, 46(suppl 1), 234–240.
+
+18. U.S. Census Bureau. TIGER/Line Shapefiles. census.gov/geographies/mapping-files/time-series/geo/tiger-line-file.html. Accessed 2026.
+
+19. USDA Economic Research Service. Rural-Urban Commuting Area (RUCA) Codes. ers.usda.gov/data-products/rural-urban-commuting-area-codes. Updated 2025.
+
+20. USDA Economic Research Service. Rural-Urban Continuum Codes (Beale Codes). ers.usda.gov/data-products/rural-urban-continuum-codes. Accessed 2026.
+
+21. Wang, F. (2015). Quantitative Methods and Socioeconomic Applications in GIS (2nd ed.). CRC Press.
+
+22. Weeks, W.B., et al. (2023). Rural-urban disparities in health outcomes, clinical care, health behaviors, and social determinants of health and an action-oriented, dynamic tool for visualizing them. PLOS Global Public Health, 3(10), e0002420.
+
+END OF TEXTBOOK — Geographic Analysis in Julia: Healthcare and Rural Populations — 2026 Edition

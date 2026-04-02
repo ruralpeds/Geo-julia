@@ -1,0 +1,90 @@
+---
+title: "Chapter 12: Bayesian Disease Mapping and CAR Models in Julia"
+subtitle: "Volume 2 — Gap Analysis and Open Population Data"
+---
+
+
+## 12.1 The Bayesian Spatial Paradigm for Rural Health
+
+The small area estimation problem — the instability of disease rates computed from small populations — is especially severe in rural health research. A rural county with 1,500 residents and 3 observed cancer deaths has a rate estimate with enormous uncertainty that cannot be meaningfully compared to an adjacent county with 8,000 residents and 24 deaths. Standard frequentist rate estimation treats each county independently and provides no mechanism for borrowing statistical strength from neighboring counties where we have better data.
+
+Bayesian hierarchical models with spatially structured random effects are the methodological solution to this problem. These models incorporate a spatial prior that pulls estimates toward the local neighborhood average in proportion to data sparsity — areas with little data are pulled strongly toward their neighbors; areas with abundant data are dominated by their own observations. The workhorse model in disease mapping is the Besag-York-Mollié (BYM) model, which decomposes the spatial random effect into a spatially structured component (modeled as a Conditional Autoregressive, or CAR, prior) and an unstructured exchangeable component.
+
+Python and R both have mature implementations of Bayesian disease mapping. R's CARBayes package provides a comprehensive suite of CAR models for areal data. R-INLA provides the Integrated Nested Laplace Approximation (INLA) algorithm that makes Bayesian spatial models computationally tractable for large datasets. Python has pymc-experimental for spatial CAR priors and pyStan for full MCMC. Julia has neither CARBayes nor INLA — but it has Turing.jl, a probabilistic programming language that can express and estimate these models through NUTS (No U-Turn Sampler) MCMC. The missing piece is a high-level interface that makes BYM model specification as clean and accessible as it is in CARBayes.
+
+
+### 12.1.1 Implementing BYM Disease Mapping in Turing.jl
+
+```julia
+using Turing, LinearAlgebra, SparseArrays, Distributions
+"""
+```
+
+Besag-York-Mollié (BYM) disease mapping model via NUTS MCMC.
+
+Appropriate for small-area mortality/incidence rate estimation.
+
+y:        Vector of observed counts per area
+
+E:        Vector of expected counts (from standardization)
+
+W:        Binary spatial weights matrix (queen contiguity)
+
+"""
+
+```julia
+@model function bym_model(y::Vector{Int}, E::Vector{Float64},
+```
+
+W::Matrix{Float64})
+
+n = length(y)
+
+```julia
+@assert length(E) == n
+# Hyperpriors
+σ_u ~ truncated(Normal(0, 1), 0, Inf)  # SD of unstructured component
+σ_v ~ truncated(Normal(0, 1), 0, Inf)  # SD of spatially structured component
+# Unstructured (iid) random effects
+u ~ MvNormal(zeros(n), σ_u^2 * I(n))
+# ICAR (intrinsic CAR) structured random effects
+# Q = D - W is the precision matrix (ICAR prior)
+```
+
+D_vec = vec(sum(W; dims=2))
+
+D = Diagonal(D_vec)
+
+Q = D - W   # Laplacian / ICAR precision matrix
+
+
+## 12.2 Excess Risk Mapping and Probability Maps
+
+```julia
+# ICAR is improper (rank-deficient Q); use soft sum-to-zero constraint
+v ~ MvNormal(zeros(n), σ_v^2 * pinv(Q + 1e-6*I(n)))
+v_centered = v .- mean(v)  # sum-to-zero constraint
+# Linear predictor on log scale (Poisson log-linear model)
+α ~ Normal(0, 1)   # overall log relative risk
+log_mu = log.(E) .+ α .+ u .+ v_centered
+# Likelihood
+y ~ arraydist(Poisson.(exp.(log_mu)))
+return exp.(α .+ u .+ v_centered)  # Smoothed relative risks
+end
+# === Fit BYM model to county-level CVD mortality ===
+# y     = observed CVD deaths per county
+# E     = expected deaths (population * national_rate)
+# W     = queen contiguity matrix from county shapefile
+model = bym_model(y_cvd, E_cvd, W_queen)
+chain = sample(model, NUTS(0.65), MCMCThreads(), 2000, 4;
+discard_initial=500)
+# Extract smoothed relative risks
+rr_samples = generated_quantities(model, chain)
+rr_mean    = vec(mean(hcat([s for s in rr_samples]...), dims=2))
+rr_lower   = vec(quantile.(eachrow(hcat([s for s in rr_samples]...)), 0.025))
+rr_upper   = vec(quantile.(eachrow(hcat([s for s in rr_samples]...)), 0.975))
+```
+
+The output of a BYM model is not a single risk estimate but a full posterior distribution for each area's relative risk (RR). This distributional output enables two powerful mapping products that are unavailable from frequentist estimates: exceedance probability maps and credible interval maps.
+
+An exceedance probability map shows, for each area, the posterior probability that the relative risk exceeds a specified threshold — for example, P(RR > 1.5 | data), the probability that a county's cardiovascular mortality rate exceeds the national average by 50% or more. This is directly interpretable as a risk communication tool: a county with P(RR > 1.5) = 0.92 can be stated with 92% confidence to have a substantially elevated risk. Credible interval maps show the 95% credible interval for the RR, providing an honest representation of estimation uncertainty that is absent from frequentist point estimate maps.

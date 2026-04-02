@@ -1,0 +1,77 @@
+---
+title: "Chapter 1: Foundations of Geographic Analysis in Healthcare"
+subtitle: "Volume 1 — Geographic Analysis in Julia: Healthcare and Rural Populations"
+---
+
+
+## 1.1 What Is Geographic Analysis?
+
+Geographic analysis — also called spatial analysis or geospatial analysis — is a broad family of quantitative and qualitative methods for understanding phenomena whose meaning depends on where they occur. Health events almost always have a spatial character: a patient lives somewhere, a hospital is located somewhere, a disease cluster exists somewhere, and the barriers to care are measured in distance or travel time. Geographic analysis uses this spatial character as both a signal and a stratifier.
+
+At its most fundamental level, geographic analysis asks three questions: Where? Why there? And with what consequence? The first question is descriptive — mapping and visualizing the distribution of health events across a landscape. The second is explanatory — using spatial statistics to identify whether patterns are random or driven by the underlying structure of populations, environments, and healthcare infrastructure. The third is actionable — translating spatial findings into decisions about resource allocation, policy, and intervention.
+
+Modern geographic analysis in healthcare blends cartography, epidemiology, spatial statistics, and computer science into a coherent workflow. Practitioners use Geographic Information Systems (GIS) as their primary toolchain — software environments that store, query, analyze, and display data that are referenced to a geographic location. The open-source revolution in GIS, combined with the emergence of high-performance scientific computing languages like Julia, has lowered the barrier to sophisticated spatial analysis and made it accessible to clinicians and public health professionals who are not trained cartographers.
+
+
+## 1.2 Historical Context: From Dot Maps to Data Science
+
+The intellectual lineage of geographic analysis in health science begins in earnest with John Snow's 1854 map of cholera deaths in the Soho district of London. Snow plotted deaths as dots on a street map and identified the Broad Street water pump as the epicenter of the outbreak — an act of spatial reasoning that preceded any formal theory of geographic statistics. Snow's map is now canonical because it demonstrated that place can be causal: the pump's location determined who was exposed, and proximity to it predicted who died.
+
+The century following Snow's map saw gradual formalization. The concept of spatial autocorrelation — the statistical tendency for nearby places to have more similar values than distant places — was codified by Patrick Alfred Pierce Moran in 1950 with the development of what is now called Moran's I statistic. Luc Anselin's 1988 textbook Spatial Econometrics and his subsequent development of the GeoDa software platform in the early 2000s made spatial statistics accessible to applied researchers. The CDC's WONDER database, launched in 1992, created for the first time a publicly accessible warehouse of spatially referenced public health statistics at the county level.
+
+The contemporary era is defined by the convergence of high-resolution spatial data (GPS-tagged electronic health records, census block-level demographic data, satellite-derived environmental exposures) with cloud computing, open-source GIS libraries, and languages designed for high-performance numerical computation. Julia, released in 2012 and achieving version 1.0 stability in 2018, is the most promising scientific programming language for this era. It combines Python-like expressiveness with C-like execution speed — a combination uniquely suited to the computational demands of large-scale spatial analysis.
+
+
+## 1.3 Why Geography Matters Especially for Healthcare
+
+Healthcare is intrinsically geographic for several reasons that do not apply with equal force to other domains of social inquiry.
+
+First, healthcare resources are fixed in physical space. A hospital cannot be in two places simultaneously. A clinic's catchment area is bounded by the geography of roads, travel time, and population density. The supply of and demand for healthcare services are separated by distance — and distance imposes real costs, both economic (transportation) and temporal (time off work) and physiological (delayed presentation of acute illness).
+
+Second, health outcomes are mediated by environmental exposures that are inherently spatial — air quality, water quality, agricultural chemical exposures, proximity to industrial polluters, elevation and climate. The social determinants of health (poverty, food insecurity, educational attainment, housing quality) are highly geographically clustered, and this clustering interacts with the geography of healthcare access to produce compounding disadvantages in specific places.
+
+Third, rural populations face a distinctive set of geographic healthcare challenges. Lower population density means fewer providers per capita, which means longer travel distances to care. Hospital closures — a chronic crisis in rural America — remove entire service categories from large geographic catchment areas. The combination of sparse provider supply, difficult terrain, and limited transportation infrastructure makes geography a first-order determinant of health outcomes in rural settings.
+
+Fourth, diseases and health conditions are themselves spatially structured. Cancer rates vary by county in ways that track industrial history. Cardiovascular disease mortality follows the contours of the Stroke Belt and the poverty geography of Appalachia. Maternal mortality clusters geographically in ways that reflect the distribution of obstetric services, poverty, and structural racism. Geographic analysis is necessary to see these patterns and to understand their drivers.
+
+
+## 1.4 Core Concepts in Spatial Analysis
+
+
+### 1.4.1 Tobler's First Law of Geography
+
+Everything is related to everything else, but near things are more related than distant things. This deceptively simple statement, articulated by geographer Waldo Tobler in 1970, is the theoretical foundation of spatial statistics. It implies that spatial autocorrelation — the correlation of a variable with itself across space — is the norm rather than the exception for geographically distributed phenomena. Health outcomes, provider supply, and environmental exposures all exhibit positive spatial autocorrelation: high values cluster with high values, and low values cluster with low values.
+
+
+### 1.4.2 The Modifiable Areal Unit Problem (MAUP)
+
+The Modifiable Areal Unit Problem (MAUP) is among the most important and underappreciated methodological issues in spatial health analysis. It refers to the fact that statistical results can change dramatically depending on the geographic scale at which data are aggregated. An analysis performed at the county level may yield completely different findings than the same analysis performed at the census tract level — even using the same underlying data. The MAUP has two components: a scale effect (results differ depending on whether analysis is done at state, county, ZIP code, or census tract level) and a zonation effect (results differ depending on how boundaries are drawn at any given scale). Awareness of the MAUP should motivate analysts to perform sensitivity analyses across multiple geographic units and to interpret findings as conditional on the specific aggregation used.
+
+
+### 1.4.3 Spatial Weights Matrices
+
+A spatial weights matrix is a fundamental data structure in spatial statistics. It encodes the neighborhood structure of a set of spatial units — which units are adjacent, how close they are, and how much statistical weight should be given to neighboring units when computing spatial statistics. The most common approaches are: (1) queen contiguity weights, in which two polygons are neighbors if they share any boundary point; (2) rook contiguity weights, in which polygons are neighbors only if they share a boundary edge; (3) k-nearest-neighbor weights, in which each unit has exactly k neighbors defined by centroid distance; and (4) inverse-distance weights, in which neighbor weights are inversely proportional to the distance between centroids. The choice of spatial weights matrix can substantially influence the results of spatial statistical analyses, and sensitivity to this choice should always be assessed.
+
+
+### 1.4.4 Spatial Autocorrelation
+
+Spatial autocorrelation is the degree to which a variable's value at one location is correlated with its values at neighboring locations. Positive spatial autocorrelation means that high values cluster with high values and low values cluster with low values — as would be expected for poverty rates, disease incidence, or provider supply. Negative spatial autocorrelation means that high values are consistently surrounded by low values — unusual in health data but theoretically possible in competitive market scenarios. The global Moran's I statistic quantifies spatial autocorrelation across the entire study area, producing a single value between -1 (perfect dispersion) and +1 (perfect clustering) with an expected value of -1/(N-1) under spatial randomness. Local indicators of spatial association (LISA), including the local Moran's I statistic developed by Anselin (1995), decompose the global statistic into location-specific contributions and enable identification of specific hot spots and cold spots.
+
+
+### 1.4.5 Spatial Regression Models
+
+When outcome variables exhibit spatial autocorrelation, ordinary least squares (OLS) regression violates its assumption of independent errors, producing biased estimates and invalid inference. Spatial regression models address this problem by explicitly modeling spatial dependence in the data. Two primary model families are used. The spatial lag model (SLM, also called the spatial autoregressive model) incorporates the spatially weighted average of neighboring values of the outcome variable as a predictor — appropriate when spatial dependence operates through a diffusion process. The spatial error model (SEM) incorporates spatial autocorrelation in the error term — appropriate when spatial autocorrelation arises from unobserved spatially clustered confounders. Geographically Weighted Regression (GWR) takes a different approach, allowing regression coefficients to vary across space and thereby modeling spatial non-stationarity in the relationships between predictors and outcomes.
+
+
+### 1.4.6 Accessibility Analysis: Floating Catchment Area Methods
+
+Accessibility analysis quantifies the ease with which a population can reach healthcare services, incorporating both the supply of providers and the demand from the population. The Two-Step Floating Catchment Area (2SFCA) method, developed by Luo and Wang (2003), is the dominant approach in healthcare accessibility research. In its basic form, the 2SFCA: (1) defines a catchment area around each provider location and calculates a provider-to-population ratio within that catchment; and (2) defines a catchment area around each population centroid, sums the provider-to-population ratios from all providers within that catchment, and assigns the summed ratio as the accessibility score. Enhancements include the Enhanced 2SFCA (E2SFCA), which applies distance-decay weights to account for the fact that providers farther from the population center contribute less to effective accessibility, and the Gravity-based 2SFCA (G2SFCA), which uses a gravity model formulation that better captures the continuous decay of accessibility with distance.
+
+
+## 1.5 Geographic Analysis in a Rural Healthcare Setting
+
+The rural healthcare context imposes specific methodological requirements on geographic analysis. Population sparsity means that small-area analyses at the census tract or ZIP code level frequently encounter suppressed or unreliable data due to small numerators. Standard epidemiological rates become unstable when based on populations of a few hundred people — a problem known as the small area estimation problem. Empirical Bayes methods, which borrow strength across neighboring areas to stabilize rate estimates, are essential in this setting.
+
+Transportation network analysis is more important in rural settings than in urban ones. Euclidean (straight-line) distance is a poor proxy for travel time in rural areas because road networks are sparse and indirect, terrain may be mountainous, and there is little public transit. Network-based accessibility analysis using actual road network data — available from OpenStreetMap, the U.S. Census Bureau TIGER/Line files, or commercial sources — produces substantially different and more accurate accessibility estimates than simple Euclidean distance measures.
+
+The geographic unit of analysis matters enormously in rural health research. Counties — the most commonly used geographic unit in rural health studies because they are the smallest unit for which many health outcomes are publicly available — are often too large and heterogeneous to capture within-county variation in access. Census tracts provide better spatial resolution but are frequently too small for stable rate estimation in sparsely populated rural areas. ZIP codes are convenient but have problematic statistical properties (non-standard shapes, changing boundaries) and should generally be avoided as the primary unit of analysis. No single geographic unit is universally optimal; analysts must make deliberate choices and perform sensitivity analyses.

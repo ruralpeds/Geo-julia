@@ -1,0 +1,484 @@
+---
+title: "Chapter 10: Claude Code Specifications for the Geo Analysis System"
+subtitle: "Volume 1 — Geographic Analysis in Julia: Healthcare and Rural Populations"
+---
+
+
+## 10.1 Overview: Building a Production Geographic Analysis System
+
+This chapter provides complete Claude Code specifications — structured prompt documents that can be used with Anthropic's Claude Code (the agentic CLI coding tool) to scaffold, extend, and maintain a production-grade geographic analysis system in Julia. Each specification is formatted as a standalone Claude Code prompt that can be saved as a .md file in a specs/ directory and invoked with claude code specs/[filename].md.
+
+The specifications are designed to be used sequentially to build a complete system, but each is also independently usable for targeted development tasks. The overall system implements the HealthcareGeo.jl module described in Chapter 8, with additional components for data pipeline automation, interactive dashboard deployment, and continuous integration.
+
+
+## 10.2 Specification 1: Initialize HealthcareGeo.jl Module
+
+```julia
+# CLAUDE CODE SPECIFICATION: Initialize HealthcareGeo.jl
+# File: specs/01_initialize_module.md
+# Usage: claude specs/01_initialize_module.md
+## Task
+```
+
+Create a new Julia package called HealthcareGeo with the following structure
+
+and files. This is a geospatial health analysis library for studying rural
+
+population health and healthcare access disparities.
+
+## Requirements
+
+### 1. Initialize Julia Package
+
+Run `julia -e 'import Pkg; Pkg.generate("HealthcareGeo")'`
+
+to create the package scaffold.
+
+### 2. Add Dependencies to Project.toml
+
+Add the following packages:
+
+- Shapefile = "8e980197-1aa4-5ad6-a5d0-b97dc4de16d6"
+
+- ArchGDAL = "c9ce4bd3-c3d5-55b8-8973-c0e20141b8c3"
+
+- GeoDataFrames = "62cb38b5-d8d2-4862-a48e-6a340996859f"
+
+- GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
+
+- GeoStats = "dcc97b0b-8ce5-5539-9008-bb190f959ef6"
+
+- Rasters = "700a0f68-0e07-4f34-ffe2-9db9f3c31d29"
+
+- DataFrames = "a93c6f00-e57d-5684-b466-afe8fa294f38"
+
+- CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00e"
+
+- Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+
+- HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+
+- JSON = "682c06a0-de6a-54ab-a142-c8b1cf79cde6"
+
+- CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+
+- GeoMakie = "db073c08-6b98-4ee5-b22a-4b16714a7f43"
+
+- BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+
+### 3. Create src/HealthcareGeo.jl
+
+Implement the main module file that includes all submodules.
+
+Export the following functions: load_counties, load_providers,
+
+classify_rural_forhp, build_queen_weights, compute_morans_i,
+
+lisa_clusters, two_step_fca, e2sfca, haversine,
+
+make_choropleth_map, healthcare_atlas
+
+### 4. Create test/runtests.jl
+
+Implement unit tests for:
+
+- haversine(): test known distance (NYC to LA ≈ 3,944 km)
+
+- compute_morans_i(): test with perfectly clustered data (should give I ≈ 1)
+
+- classify_rural_forhp(): test with mock tract data including all 4 rules
+
+- two_step_fca(): test with 3 providers and 5 population locations
+
+### 5. Create README.md
+
+Write a comprehensive README with installation instructions, quick start
+
+example loading North Dakota county data and computing accessibility scores,
+
+and links to documentation.
+
+
+## 10.3 Specification 2: Data Pipeline — HRSA and Census Data
+
+```julia
+# CLAUDE CODE SPECIFICATION: HRSA and Census Data Pipeline
+# File: specs/02_data_pipeline.md
+## Task
+```
+
+Implement src/data/download.jl within the HealthcareGeo package.
+
+This module automates downloading and caching of data from HRSA and
+
+the U.S. Census Bureau.
+
+## Functions to Implement
+
+### download_tiger_counties(year; force_refresh=false)
+
+Download U.S. county TIGER/Line shapefile for the given year.
+
+Cache in data/raw/tiger/. Return path to local .shp file.
+
+URL pattern: https://www2.census.gov/geo/tiger/TIGER{year}/COUNTY/
+
+tl_{year}_us_county.zip
+
+### download_ruca_codes(; force_refresh=false)
+
+Download 2020 RUCA codes from USDA ERS.
+
+URL: https://www.ers.usda.gov/webdocs/DataFiles/53241/
+
+ruca2010revised.xlsx
+
+Parse XLSX, return DataFrame with columns: fips_tract, ruca_primary,
+
+ruca_secondary, state_fips, county_fips.
+
+Use the XLSX.jl package.
+
+### download_hpsa_shapefile(; force_refresh=false)
+
+Download current HPSA shapefile from HRSA data portal.
+
+URL: https://data.hrsa.gov/DataDownload/DD_Files/
+
+BCD_HPSA_FCT_DET_PC.xlsx
+
+Note: HRSA provides HPSA data as Excel; convert to spatial DataFrame.
+
+Geocode using lat/lon columns (HPS_LAT, HPS_LON) present in the file.
+
+### fetch_acs_insurance_coverage(state_fips, year=2022)
+
+Fetch uninsurance rates by census tract from Census ACS 5-year estimates.
+
+Variables: B27001_001E (total), B27001_017E, B27001_033E (uninsured groups)
+
+Use Census API key from ENV["CENSUS_API_KEY"] or prompt if absent.
+
+Return DataFrame with columns: geoid, total_pop, uninsured_n, uninsured_pct
+
+### load_ahrf(filepath)
+
+Load Area Health Resources Files SAS transport file.
+
+Require ReadStatTables.jl. Return DataFrame selecting:
+
+county_fips (F11), active_pcp_per_100k (F1522086),
+
+rucc (F1522166), pct_poverty (F1306105), median_income (F0453053),
+
+total_population (F0453048).
+
+## Error Handling
+
+All download functions should: check for network availability before
+
+attempting download; provide informative error messages with download URL
+
+if network fails; validate file integrity after download (check file size > 0,
+
+attempt to parse the first row).
+
+## Caching Strategy
+
+Use a data/raw/ directory relative to the project root.
+
+Create subdirectories: tiger/, hrsa/, census/, usda/.
+
+Add a manifest.json in each subdirectory recording download date and URL.
+
+force_refresh=false skips download if cached file exists and is < 365 days old.
+
+
+## 10.4 Specification 3: Spatial Analysis Engine
+
+```julia
+# CLAUDE CODE SPECIFICATION: Spatial Analysis Engine
+# File: specs/03_spatial_analysis.md
+## Task
+```
+
+Implement the complete spatial analysis engine in src/analysis/.
+
+## Files to Create
+
+### src/analysis/weights.jl
+
+Implement spatial weights matrix construction:
+
+- build_queen_weights(geoms): Queen contiguity weights from polygon geometries.
+
+Use GeoInterface.intersects() for adjacency testing.
+
+Return row-standardized Matrix{Float64}.
+
+- build_knn_weights(coords, k=5): K-nearest neighbor weights.
+
+coords is n×2 matrix of lat/lon centroids.
+
+Use haversine distance. Return row-standardized matrix.
+
+- build_distance_band_weights(coords; bandwidth_km=50.0):
+
+Binary distance band weights. All pairs within bandwidth_km get weight 1.
+
+Return row-standardized matrix.
+
+- build_inverse_distance_weights(coords; power=1.0):
+
+Weights proportional to 1/d^power. Return row-standardized matrix.
+
+### src/analysis/autocorrelation.jl
+
+Implement spatial autocorrelation statistics:
+
+- compute_morans_i(values, W; permutations=999):
+
+Returns NamedTuple (I, expected_I, variance, z_score, p_value)
+
+- compute_geary_c(values, W; permutations=999):
+
+Geary's C statistic. C=1 is spatial randomness, C<1 is clustering.
+
+- lisa_clusters(values, W; permutations=999, alpha=0.05):
+
+Returns Vector{String} with HH/LL/HL/LH/NS for each location.
+
+- getis_ord_g(values, W; permutations=999):
+
+Getis-Ord G* hotspot analysis. Returns z-scores.
+
+### src/analysis/accessibility.jl
+
+Implement healthcare accessibility measures:
+
+- two_step_fca(providers, pop_locs, catchment_km):
+
+Standard 2SFCA. Euclidean distance.
+
+- e2sfca(providers, pop_locs, catchment_km; decay=:gaussian, sigma_km=15.0):
+
+Enhanced 2SFCA with distance decay.
+
+Supported decay functions: :gaussian, :linear, :inverse, :kernel
+
+- network_2sfca(providers, pop_locs, travel_time_matrix, catchment_min):
+
+2SFCA using pre-computed network travel time matrix (from OSRM).
+
+- gravity_accessibility(providers, pop_locs; beta=2.0):
+
+Gravity model accessibility index: A_i = Σ_j S_j / d_ij^beta
+
+### src/analysis/regression.jl
+
+Implement spatial regression methods:
+
+- spatial_lag_model(y, X, W): Spatial autoregressive model.
+
+Returns NamedTuple (coefs, rho, log_likelihood, AIC)
+
+- spatial_error_model(y, X, W): Spatial error model.
+
+Returns NamedTuple (coefs, lambda, log_likelihood, AIC)
+
+- gwr(y, X, coords; bandwidth_km=50.0, kernel=:bisquare):
+
+Geographically weighted regression.
+
+Returns DataFrame with local coefficients and local R².
+
+## Testing Requirements
+
+For each function, add tests in test/runtests.jl:
+
+- Test with synthetic data where true answers are known
+
+- Test edge cases (all same values, single unit, disconnected graph)
+
+- Benchmark with @btime for n=3000 counties target performance < 5 seconds
+
+
+## 10.5 Specification 4: Automated Report Generation
+
+```julia
+# CLAUDE CODE SPECIFICATION: Automated Rural Health Report Generator
+# File: specs/04_report_generator.md
+## Task
+```
+
+Build a command-line report generator that produces a complete rural health
+
+geographic analysis report for a specified state. The report should be a
+
+multi-page PDF with maps, tables, and narrative text.
+
+## Entry Point
+
+Create scripts/generate_report.jl with command-line interface:
+
+julia scripts/generate_report.jl --state ND --year 2022 --output report.pdf
+
+## Report Sections
+
+### Section 1: State Rural Profile
+
+- Map: County-level RUCA classification (color by rurality tier)
+
+- Table: Count and % of population in rural/urban by RUCA tier
+
+- Narrative: 2-3 sentence automated summary of rural population composition
+
+### Section 2: Healthcare Provider Supply
+
+- Map: Primary care physicians per 100,000 population by county (choropleth)
+
+- Map: HPSA-designated areas overlaid on county map
+
+- Table: Top 10 most underserved counties (lowest PCP per 100k)
+
+- Statistics: Moran's I for provider density (test for geographic clustering)
+
+### Section 3: Spatial Accessibility Analysis
+
+- Map: E2SFCA accessibility scores by census tract
+
+- Map: Network-based 30-minute drive catchment areas for all hospitals
+
+- Table: Population living > 30, 45, 60 minutes from nearest hospital
+
+- Statistics: % rural population in access desert (accessibility score < p10)
+
+### Section 4: Health Outcomes Geography
+
+- Map: Age-adjusted cardiovascular mortality rate by county (CDC WONDER data)
+
+- Map: LISA cluster map for CVD mortality
+
+- Map: Premature death rate (YPLL < 75 per 100k, County Health Rankings)
+
+- Statistics: Moran's I for CVD mortality; identify significant HH clusters
+
+### Section 5: Social Determinants
+
+- Map: Poverty rate by census tract (ACS 5-year)
+
+- Map: Uninsurance rate by census tract
+
+- Bivariate map: Provider density vs. poverty (2×2 grid classification)
+
+- Correlation table: Pearson and Moran's bivariate I for SDOH vs. health outcomes
+
+## Technical Requirements
+
+Use CairoMakie for all maps (PDF-quality vector output).
+
+Compose pages using the Pages layout system.
+
+Use ColorBrewer-compatible color schemes throughout.
+
+Add HRSA and Census data attribution in page footer.
+
+Generate all maps at 300 DPI equivalent quality.
+
+Complete report generation for a single state should run in < 5 minutes
+
+on a modern laptop (M1/M2 Mac or equivalent).
+
+
+## 10.6 Specification 5: Claude AI-Powered Geo Analysis Assistant
+
+```julia
+# CLAUDE CODE SPECIFICATION: AI-Powered Analysis Assistant
+# File: specs/05_ai_assistant.md
+## Task
+```
+
+Build an AI-powered geographic analysis assistant as a Pluto.jl notebook
+
+that uses the Anthropic API to provide natural-language interpretation of
+
+spatial analysis results.
+
+## Architecture
+
+The assistant lives in notebooks/geo_assistant.jl as a reactive Pluto notebook.
+
+It uses the HealthcareGeo.jl analysis functions to compute results and then
+
+calls the Anthropic Claude API (via HTTP.jl) to interpret findings.
+
+## Required Components
+
+### 1. Analysis Runner Cell
+
+A cell that: loads county data for a user-selected state,
+
+runs Moran's I, LISA clustering, and E2SFCA accessibility,
+
+stores results as reactive observables that downstream cells can use.
+
+### 2. Anthropic API Integration Cell
+
+```julia
+function interpret_results(morans_result, lisa_result, accessibility_df,
+state_name; api_key=ENV["ANTHROPIC_API_KEY"])
+```
+
+Build a structured prompt describing the statistical results numerically.
+
+Include: Moran's I value, z-score, p-value, number of HH and LL clusters,
+
+% population in access desert, mean and SD of accessibility scores.
+
+System prompt: "You are an expert in rural health geography and spatial
+
+epidemiology. You interpret spatial analysis results for healthcare
+
+policymakers and rural health researchers. Your interpretations are
+
+accurate, actionable, and accessible to non-statistician readers."
+
+Use the claude-sonnet-4-20250514 model with max_tokens=1500.
+
+Return the interpretation as a Markdown string.
+
+### 3. Interactive Map Cell
+
+Using WGLMakie inside Pluto, render an interactive choropleth map
+
+of the LISA clusters. Include a county name tooltip on hover.
+
+Allow the user to click on a county to see its data in a sidebar panel.
+
+### 4. Policy Recommendation Cell
+
+After the AI interpretation, a second API call generates 3-5 specific,
+
+evidence-based policy recommendations for improving healthcare access
+
+in the identified shortage clusters. Format as a numbered list.
+
+Include relevant federal programs (NHSC, HPSA designation, CAH status)
+
+that apply to the identified shortage areas.
+
+## Error Handling
+
+If the API call fails (network error, rate limit, invalid key):
+
+display a friendly error message in the notebook and fall back to a
+
+template-based interpretation using rule-based logic.
+
+## Dependencies
+
+Add to Project.toml: Pluto, WGLMakie, PlutoUI
+
+The notebook must be fully reproducible: all data is downloaded
+
+automatically via the data pipeline module.

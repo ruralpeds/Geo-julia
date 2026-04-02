@@ -1,0 +1,192 @@
+---
+title: "Chapter 34: The Complete Ecosystem Build — Master Claude Code Program"
+subtitle: "Volume 4 — Advanced Methods, Real Data, and Deployment"
+---
+
+
+## 34.1 The Grand Unified Specification
+
+This final chapter provides the master Claude Code program that, when executed, builds the complete Julia geospatial healthcare ecosystem described across all four volumes. This is not a conceptual outline — it is a precise, sequential specification that Claude Code (the claude CLI) can execute to produce working, tested, registered-quality Julia packages.
+
+```julia
+# MASTER CLAUDE CODE PROGRAM — COMPLETE JULIA GEOSPATIAL ECOSYSTEM
+# File: BUILD_EVERYTHING.md
+# Usage: claude BUILD_EVERYTHING.md
+# Prerequisites: Julia 1.10+, git, GitHub SSH key configured,
+#                CENSUS_API_KEY environment variable set
+# Estimated time: 4-6 hours on a modern laptop
+## PHASE 0: Environment Setup (5 minutes)
+```
+
+Execute the following shell commands to prepare the workspace:
+
+```bash
+
+mkdir -p ~/dev/julia_geo_ecosystem
+
+cd ~/dev/julia_geo_ecosystem
+
+git init
+
+julia -e 'import Pkg; Pkg.add(["PkgTemplates","Revise","BenchmarkTools","ProfileView"])'
+
+```
+
+Create the workspace Manifest at ~/dev/julia_geo_ecosystem/Workspace.toml:
+
+```toml
+
+[workspace]
+
+projects = [
+
+"SpatialStats/Project.toml",
+
+"Geocode/Project.toml",
+
+"MapClassify/Project.toml",
+
+"SpatialReg/Project.toml",
+
+"PointPatterns/Project.toml",
+
+"Overpass/Project.toml",
+
+"HealthcareGeo/Project.toml",
+
+]
+
+```
+
+## PHASE 1: SpatialStats.jl (Days 1-10)
+
+Execute specs/pkg01_spatialstats.md in full.
+
+Milestone: All 6 test files pass, @inferred for all hot-path functions.
+
+Benchmark target: queen_weights(53 counties) < 1s, moran(999 perms) < 2s.
+
+## PHASE 2: Geocode.jl (Days 11-14)
+
+Execute specs/pkg02_geocode.md in full.
+
+Milestone: Census geocoder correctly geocodes Bismarck ND city hall.
+
+Chunked geocoding of 5,000 synthetic addresses completes without error.
+
+## PHASE 3: MapClassify.jl (Days 15-17)
+
+Execute specs/pkg03_mapclassify.md in full.
+
+Milestone: All 8 classification schemes produce valid sorted break arrays.
+
+Natural breaks on lognormal data matches mapclassify Python reference.
+
+## PHASE 4: SpatialReg.jl (Days 18-23)
+
+Execute specs/pkg04_spatialreg.md in full.
+
+Milestone: SLM rho estimate within 0.005 of PySAL on same synthetic data.
+
+SEM lambda within 0.01 of R spatialreg on same synthetic data.
+
+LM tests correctly identify SLM vs SEM specification on known datasets.
+
+## PHASE 5: PointPatterns.jl (Days 24-27)
+
+Execute specs/pkg05_pointpatterns.md in full.
+
+Milestone: K-function on clustered synthetic data lies above CSR envelope.
+
+K-function on regular grid data lies below CSR envelope.
+
+Kulldorff scan identifies injected disease cluster in synthetic data.
+
+## PHASE 6: Overpass.jl (Days 28-30)
+
+Execute specs/pkg06_overpass.md in full.
+
+Milestone: download_road_network for small North Dakota bbox returns valid OSM XML.
+
+download_healthcare_pois returns hospitals near Bismarck ND.
+
+Cache layer prevents duplicate downloads.
+
+## PHASE 7: HealthcareGeo.jl Integration Package (Days 31-35)
+
+Create HealthcareGeo/ as a meta-package that depends on all 6 packages above.
+
+Implement the complete North Dakota analysis pipeline from Chapter 29.
+
+Implement the Genie.jl web service from Chapter 31.
+
+Implement the Pluto.jl dashboard from Chapter 30.
+
+## PHASE 8: Validation and Registration (Days 36-40)
+
+Run the complete integration test:
+
+```julia
+
+```julia
+using SpatialStats, Geocode, MapClassify, PointPatterns, Overpass
+include("test/integration_test.jl")
+```
+```
+
+All of the following must pass:
+
+- queen_weights(53 ND counties) → 53-unit weights, mean_neighbors ≈ 5.2
+
+- moran(nd_cvd_rates, w) → I > 0.2, p < 0.05 (CVD rates are spatially clustered)
+
+- moran_local: at least 3 HH clusters identified in southwestern ND
+
+- geocode_batch(10 ND addresses) → ≥8 matches
+
+- classify(nd_pov_rates, NaturalBreaks(5)) → 5 valid classes
+
+- scan_statistic on ND CVD data → identifies cluster in known high-rate region
+
+- download_healthcare_pois(nd_bbox) → nrow > 50
+
+- slm(nd_cvd, X, w) → rho significant at p < 0.05
+
+Tag v0.1.0 for all 6 packages and submit to General registry:
+
+- git tag v0.1.0 in each package directory
+
+- Push tags: git push origin --tags
+
+- Open each package's GitHub repo and comment: @JuliaRegistrator register
+
+## FINAL DELIVERABLES
+
+After completion, the following will be available to the global Julia community:
+
+] add SpatialStats     # Moran's I, LISA, G*, spatial regression
+
+] add Geocode          # Address geocoding for any Julia workflow
+
+] add MapClassify      # Choropleth classification (15 schemes)
+
+] add SpatialReg       # Spatial lag/error/Durbin models
+
+] add PointPatterns    # K-function, scan statistic, intensity estimation
+
+] add Overpass         # OpenStreetMap data for any bounding box
+
+Collectively these packages fill the 15 critical gaps identified in
+
+Volume II of this series, bringing Julia's geospatial ecosystem to
+
+functional parity with Python's PySAL and R's spdep for the healthcare
+
+and rural population health analysis use cases documented throughout
+
+this four-volume series.
+
+
+## 34.2 Package Development Checklist
+
+END — Volume IV: Julia Geospatial Package Engineering — Advanced Methods, Real Data, and Deployment — 2026 Edition

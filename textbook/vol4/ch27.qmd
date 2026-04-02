@@ -1,0 +1,242 @@
+---
+title: "Chapter 27: Spatial Generalised Linear Models — Disease Counts and Proportions"
+subtitle: "Volume 4 — Advanced Methods, Real Data, and Deployment"
+---
+
+
+## 27.1 Why Standard Regression Fails for Disease Rate Data
+
+Health outcomes data rarely follows the normality and homoscedasticity assumptions of ordinary linear regression. Disease counts are non-negative integers, typically following Poisson or negative binomial distributions. Proportions (uninsurance rates, vaccination coverage) are bounded between 0 and 1, better modeled by binomial or beta distributions. Applying OLS to these outcomes produces biased estimates, invalid standard errors, and predicted values that may be negative or exceed their logical bounds.
+
+Generalized Linear Models (GLMs) resolve this by linking the mean of the outcome to a linear predictor through a link function, and specifying a distributional family for the outcome. Spatial GLMs add a spatial random effect or spatially lagged component to the GLM linear predictor. This chapter builds `SpatialGLM.jl`, implementing the three most important spatial GLM types for healthcare analysis: the spatial Poisson model for disease counts, the spatial logistic model for binary outcomes, and the spatial negative binomial model for overdispersed counts.
+
+
+### 27.1.1 Spatial Poisson Model via MCMC (Turing.jl)
+
+```julia
+# === Spatial Poisson GLM with CAR random effect ===
+# More general than BYM: handles covariates properly
+using Turing, LinearAlgebra, SparseArrays, Statistics
+"""
+spatial_poisson_glm(y, X, E, W;
+n_iter=2000, n_chains=4, adapt_delta=0.8)
+```
+
+Bayesian Spatial Poisson GLM with ICAR random effect.
+
+Model: log(μᵢ) = log(Eᵢ) + Xᵢβ + φᵢ
+
+φ ~ ICAR(W, σ²_φ)
+
+y ~ Poisson(μ)
+
+```julia
+# Arguments
+- `y`:  Observed case counts (Vector{Int})
+- `X`:  Design matrix with covariates (n × k), include intercept
+- `E`:  Expected counts for standardization (Vector{Float64})
+- `W`:  Binary spatial weights matrix (queen contiguity)
+# Returns
+```
+
+Turing MCMC chain; use Turing.summarize(chain) for coefficient table
+
+"""
+
+```julia
+@model function spatial_poisson_glm(
+y::Vector{Int},
+```
+
+X::Matrix{Float64},
+
+E::Vector{Float64},
+
+W::Matrix{Float64}
+
+)
+
+n, k = size(X)
+
+```julia
+# ── Regression coefficients ───────────────────────────────
+β ~ MvNormal(zeros(k), 10.0 * I(k))
+# ── Spatial random effect hyperparameter ──────────────────
+σ_φ ~ truncated(Normal(0, 1); lower=0)
+# ── ICAR spatial random effect ────────────────────────────
+# Precision matrix: Q = D - W (graph Laplacian)
+# ICAR is improper; use pseudo-inverse for sampling
+```
+
+D_vec = vec(sum(W; dims=2))
+
+D  = Diagonal(D_vec)
+
+Q  = D - W
+
+Σ_φ = σ_φ^2 * pinv(Q + 1e-6 * I(n))
+
+φ  ~ MvNormal(zeros(n), Symmetric(Σ_φ))
+
+```julia
+# Sum-to-zero constraint for identifiability
+φ_centered = φ .- mean(φ)
+# ── Log-linear predictor ─────────────────────────────────
+η = log.(E) .+ X * β .+ φ_centered
+μ = exp.(η)
+# ── Likelihood ────────────────────────────────────────────
+for i in 1:n
+y[i] ~ Poisson(μ[i])
+end
+return (; μ, φ_centered, excess_risk = μ ./ E)
+end
+# ── Fit the model ────────────────────────────────────────────
+function fit_spatial_poisson(
+y::Vector{Int}, X::Matrix{Float64},
+```
+
+E::Vector{Float64}, W::Matrix{Float64};
+
+n_iter::Int = 2000, n_chains::Int = 4
+
+)
+
+model = spatial_poisson_glm(y, X, E, W)
+
+
+### 27.1.2 Spatial Negative Binomial for Overdispersed Counts
+
+```julia
+# NUTS sampler: No-U-Turn Sampler (gradient-based)
+sampler = NUTS(0.8)  # 0.8 = target acceptance rate
+# Multi-chain MCMC (parallel if Julia started with -t N)
+chain = sample(model, sampler, MCMCThreads(), n_iter, n_chains;
+discard_initial = n_iter ÷ 4,  # 25% warmup
+progress = true)
+# Posterior summaries
+post = generated_quantities(model, chain)
+rr_post = [q.excess_risk for q in post]
+rr_mean = mean(rr_post)
+rr_95lo = [quantile([rr_post[k][i] for k in 1:length(rr_post)], 0.025)
+for i in 1:length(y)]
+rr_95hi = [quantile([rr_post[k][i] for k in 1:length(rr_post)], 0.975)
+for i in 1:length(y)]
+return (; chain, rr_mean, rr_95lo, rr_95hi)
+end
+# === Negative Binomial spatial model for overdispersed counts ===
+# Overdispersion (Var > Mean) is common in disease surveillance data
+# NegBin adds a dispersion parameter r: Var = μ + μ²/r
+@model function spatial_negbin_glm(
+y::Vector{Int},
+```
+
+X::Matrix{Float64},
+
+E::Vector{Float64},
+
+W::Matrix{Float64}
+
+)
+
+n, k = size(X)
+
+β   ~ MvNormal(zeros(k), 10.0 * I(k))
+
+σ_φ ~ truncated(Normal(0,1); lower=0)
+
+```julia
+# NegBin dispersion: r → ∞ gives Poisson; small r = overdispersed
+r   ~ truncated(Normal(10, 10); lower=0.01)
+```
+
+D   = Diagonal(vec(sum(W; dims=2)))
+
+Σ_φ = σ_φ^2 * pinv((D - W) + 1e-6 * I(n))
+
+φ   ~ MvNormal(zeros(n), Symmetric(Σ_φ))
+
+φ_c = φ .- mean(φ)
+
+η   = log.(E) .+ X * β .+ φ_c
+
+μ   = exp.(η)
+
+for i in 1:n
+
+
+## 27.2 Spatial Logistic Regression for Binary Health Outcomes
+
+```julia
+# NegativeBinomial(r, p) where μ = r*(1-p)/p
+# → p = r/(r+μ)
+p_i = r / (r + μ[i])
+y[i] ~ NegativeBinomial(r, p_i)
+end
+end
+```
+
+Binary health outcomes — whether a patient received a preventive service, whether a county has a hospital, whether a census tract has a pharmacy desert — require logistic regression. Spatial logistic models add a spatially correlated random effect to the standard logit link, accounting for the tendency of neighboring areas to have similar access to care.
+
+```julia
+# === Spatial logistic model: county-level hospital presence ===
+@model function spatial_logistic(
+y::Vector{Int},        # 1 = has hospital, 0 = no hospital
+```
+
+X::Matrix{Float64},
+
+W::Matrix{Float64}
+
+)
+
+n, k = size(X)
+
+β   ~ MvNormal(zeros(k), 5.0 * I(k))
+
+σ_φ ~ truncated(Normal(0,1); lower=0)
+
+D_vec = vec(sum(W; dims=2))
+
+Σ_φ   = σ_φ^2 * pinv(Diagonal(D_vec) - W + 1e-6*I(n))
+
+φ     ~ MvNormal(zeros(n), Symmetric(Σ_φ))
+
+φ_c   = φ .- mean(φ)
+
+```julia
+# Logit link: P(yᵢ=1) = σ(Xᵢβ + φᵢ)
+for i in 1:n
+p_i = logistic(dot(X[i,:], β) + φ_c[i])
+y[i] ~ Bernoulli(p_i)
+end
+end
+logistic(x) = 1.0 / (1.0 + exp(-x))
+# === Posterior predictive check ===
+"""
+```
+
+Compare observed vs predicted counts to assess model fit.
+
+Good fit: observed within the 95% predictive interval for most areas.
+
+"""
+
+```julia
+function posterior_predictive_check(
+y_obs::Vector{Int},
+chain,
+model;
+nsim::Int = 500
+)
+samples = sample(chain, nsim; replace=true)
+y_rep   = [rand.(Poisson.(exp.(generated_quantities(model, samples[k]).μ)))
+for k in 1:nsim]
+# Bayesian p-values: P(T(y_rep) > T(y_obs))
+# Test statistics: mean, variance, min, max, Moran's I
+bp_mean = mean([mean(yr) > mean(y_obs) for yr in y_rep])
+bp_var  = mean([var(yr)  > var(y_obs)  for yr in y_rep])
+return (bp_mean=bp_mean, bp_var=bp_var,
+y_rep_mean = mean([mean(yr) for yr in y_rep]),
+y_obs_mean = mean(y_obs))
+end
+```
