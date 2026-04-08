@@ -17,73 +17,64 @@ Python and R both have mature implementations of Bayesian disease mapping. R's C
 
 ```julia
 using Turing, LinearAlgebra, SparseArrays, Distributions
+
 """
-```
-
 Besag-York-Mollié (BYM) disease mapping model via NUTS MCMC.
-
 Appropriate for small-area mortality/incidence rate estimation.
 
 y:        Vector of observed counts per area
-
 E:        Vector of expected counts (from standardization)
-
 W:        Binary spatial weights matrix (queen contiguity)
-
 """
-
-```julia
 @model function bym_model(y::Vector{Int}, E::Vector{Float64},
-```
+                            W::Matrix{Float64})
+    n = length(y)
+    @assert length(E) == n
 
-W::Matrix{Float64})
+    # Hyperpriors
+    σ_u ~ truncated(Normal(0, 1), 0, Inf)  # SD of unstructured component
+    σ_v ~ truncated(Normal(0, 1), 0, Inf)  # SD of spatially structured component
 
-n = length(y)
+    # Unstructured (iid) random effects
+    u ~ MvNormal(zeros(n), σ_u^2 * I(n))
 
-```julia
-@assert length(E) == n
-# Hyperpriors
-σ_u ~ truncated(Normal(0, 1), 0, Inf)  # SD of unstructured component
-σ_v ~ truncated(Normal(0, 1), 0, Inf)  # SD of spatially structured component
-# Unstructured (iid) random effects
-u ~ MvNormal(zeros(n), σ_u^2 * I(n))
-# ICAR (intrinsic CAR) structured random effects
-# Q = D - W is the precision matrix (ICAR prior)
-```
+    # ICAR (intrinsic CAR) structured random effects
+    # Q = D - W is the precision matrix (ICAR prior)
+    D_vec = vec(sum(W; dims=2))
+    D = Diagonal(D_vec)
+    Q = D - W   # Laplacian / ICAR precision matrix
+    # ICAR is improper (rank-deficient Q); use soft sum-to-zero constraint
+    v ~ MvNormal(zeros(n), σ_v^2 * pinv(Q + 1e-6*I(n)))
+    v_centered = v .- mean(v)  # sum-to-zero constraint
 
-D_vec = vec(sum(W; dims=2))
+    # Linear predictor on log scale (Poisson log-linear model)
+    α ~ Normal(0, 1)   # overall log relative risk
+    log_mu = log.(E) .+ α .+ u .+ v_centered
 
-D = Diagonal(D_vec)
+    # Likelihood
+    y ~ arraydist(Poisson.(exp.(log_mu)))
 
-Q = D - W   # Laplacian / ICAR precision matrix
-
-
-## 12.2 Excess Risk Mapping and Probability Maps
-
-```julia
-# ICAR is improper (rank-deficient Q); use soft sum-to-zero constraint
-v ~ MvNormal(zeros(n), σ_v^2 * pinv(Q + 1e-6*I(n)))
-v_centered = v .- mean(v)  # sum-to-zero constraint
-# Linear predictor on log scale (Poisson log-linear model)
-α ~ Normal(0, 1)   # overall log relative risk
-log_mu = log.(E) .+ α .+ u .+ v_centered
-# Likelihood
-y ~ arraydist(Poisson.(exp.(log_mu)))
-return exp.(α .+ u .+ v_centered)  # Smoothed relative risks
+    return exp.(α .+ u .+ v_centered)  # Smoothed relative risks
 end
+
 # === Fit BYM model to county-level CVD mortality ===
 # y     = observed CVD deaths per county
 # E     = expected deaths (population * national_rate)
 # W     = queen contiguity matrix from county shapefile
+
 model = bym_model(y_cvd, E_cvd, W_queen)
 chain = sample(model, NUTS(0.65), MCMCThreads(), 2000, 4;
-discard_initial=500)
+               discard_initial=500)
+
 # Extract smoothed relative risks
 rr_samples = generated_quantities(model, chain)
 rr_mean    = vec(mean(hcat([s for s in rr_samples]...), dims=2))
 rr_lower   = vec(quantile.(eachrow(hcat([s for s in rr_samples]...)), 0.025))
 rr_upper   = vec(quantile.(eachrow(hcat([s for s in rr_samples]...)), 0.975))
 ```
+
+
+## 12.2 Excess Risk Mapping and Probability Maps
 
 The output of a BYM model is not a single risk estimate but a full posterior distribution for each area's relative risk (RR). This distributional output enables two powerful mapping products that are unavailable from frequentist estimates: exceedance probability maps and credible interval maps.
 

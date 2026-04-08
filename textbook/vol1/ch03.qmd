@@ -20,95 +20,86 @@ GeoInterface.jl defines a common protocol for geospatial vector data in Julia �
 
 ```julia
 using GeoInterface
+
 # Check if a geometry implements GeoInterface
-```
-
 GeoInterface.isgeometry(geom)        # -> Bool
-
 GeoInterface.geomtrait(geom)          # -> PolygonTrait, PointTrait, etc.
-
 GeoInterface.coordinates(geom)        # -> Vector of coordinates
-
 GeoInterface.ncoord(geom)             # -> number of coordinate dimensions
+```
 
 
 ### 3.2.2 Shapefile.jl
 
 Shapefile.jl provides native Julia support for reading and writing ESRI Shapefiles — the most ubiquitous format for geographic vector data in the public health and government data world. Census TIGER/Line files, HRSA geographic data, and most CDC GIS data are distributed as shapefiles. Shapefile.jl integrates with the Tables.jl interface, making it straightforward to load shapefile data directly into DataFrames.
 
-
-### 3.2.3 ArchGDAL.jl
-
 ```julia
 using Shapefile, DataFrames
+
 # Read a Census TIGER/Line county shapefile
 table = Shapefile.Table("tl_2023_us_county.shp")
 df = DataFrame(table)   # All attributes as columns
+
 # Access geometry column
 geoms = Shapefile.shapes(table)   # Vector of geometry objects
+
 # Filter to a specific state (FIPS 38 = North Dakota)
 nd_idx = findall(row -> row.STATEFP == "38", eachrow(df))
 nd_geoms = geoms[nd_idx]
 nd_df = df[nd_idx, :]
 ```
 
+
+### 3.2.3 ArchGDAL.jl
+
 ArchGDAL.jl is a comprehensive Julia wrapper for the Geospatial Data Abstraction Library (GDAL) — the de facto open-source standard for reading and writing raster and vector geospatial datasets. Through ArchGDAL, Julia can natively read over 200 vector and raster formats, including Shapefile, GeoJSON, KML, GeoTIFF, NetCDF, and more. ArchGDAL provides a higher-level, more Julian API than the lower-level GDAL.jl wrapper.
 
 ```julia
 using ArchGDAL
+
 # Open a vector dataset
-```
-
 ArchGDAL.read("counties.shp") do dataset
-
-layer = ArchGDAL.getlayer(dataset, 0)
-
-ArchGDAL.nfeature(layer)       # Count features
-
-feature = ArchGDAL.nextfeature(layer)
-
-geom = ArchGDAL.getgeom(feature)
-
-ArchGDAL.geomname(geom)        # Geometry type name
-
-ArchGDAL.getarea(geom)         # Area in CRS units
-
-```julia
+    layer = ArchGDAL.getlayer(dataset, 0)
+    ArchGDAL.nfeature(layer)       # Count features
+    feature = ArchGDAL.nextfeature(layer)
+    geom = ArchGDAL.getgeom(feature)
+    ArchGDAL.geomname(geom)        # Geometry type name
+    ArchGDAL.getarea(geom)         # Area in CRS units
 end
+
 # Coordinate reference system operations
 src_crs = ArchGDAL.importEPSG(4326)    # WGS 84 geographic
 dst_crs = ArchGDAL.importEPSG(5070)    # Conus Albers (US National)
-```
-
 ArchGDAL.createcoordtrans(src_crs, dst_crs) do transform
-
-ArchGDAL.transform!(geom, transform)
+    ArchGDAL.transform!(geom, transform)
+end
+```
 
 
 ### 3.2.4 GeoDataFrames.jl
-
-```julia
-end
-```
 
 GeoDataFrames.jl provides a DataFrame-centric interface for geographic vector data, built on top of ArchGDAL. It is the Julia analogue of Python's GeoPandas. Users interact with geographic data as familiar DataFrames with a special geometry column, using standard DataFrame operations for filtering, grouping, and joining, while geographic-specific operations (spatial joins, overlay, buffer, dissolve) are provided as additional methods.
 
 ```julia
 using GeoDataFrames
+
 # Load HRSA HPSA shapefile
 hpsa = GeoDataFrames.read("HPSA_Shapefiles/HPSA_Primary_Care.shp")
+
 # Basic spatial operations
 hpsa_rural = filter(row -> row.Designation_Type == "Geographic Area", hpsa)
+
 # Spatial join: which counties intersect HPSAs?
 counties = GeoDataFrames.read("tl_2023_us_county.shp")
 county_hpsa = GeoDataFrames.innerjoin(counties, hpsa_rural;
-on = :geometry => :geometry, kind = :intersects)
+    on = :geometry => :geometry, kind = :intersects)
+
 # Calculate area of each HPSA polygon
 hpsa.area_km2 = GeoDataFrames.area(hpsa) ./ 1e6  # m² to km²
-# Write result
-```
 
+# Write result
 GeoDataFrames.write("rural_hpsa_counties.shp", county_hpsa)
+```
 
 
 ## 3.3 Core Raster Data Packages
@@ -118,56 +109,87 @@ GeoDataFrames.write("rural_hpsa_counties.shp", county_hpsa)
 
 Rasters.jl is the central raster data package in the Julia ecosystem. It provides a unified type system for working with gridded spatial data — satellite imagery, digital elevation models, environmental exposure grids, and continuous surface estimates. Rasters.jl integrates with DimensionalData.jl for dimension-aware indexing, supports lazy reading of large files via memory mapping, and provides high-performance raster algebra operations that take full advantage of Julia's broadcasting system.
 
+```julia
+using Rasters, RasterDataSources
+
+# Download and load population density raster (LandScan or WorldPop)
+# (RasterDataSources.jl handles downloads from standard repositories)
+
+# Load a local GeoTIFF (e.g., CDC county-level mortality raster)
+mortality_raster = Raster("county_mortality.tif")
+
+# Inspect
+size(mortality_raster)        # Grid dimensions
+dims(mortality_raster)        # X/Y/time dimensions
+crs(mortality_raster)         # Coordinate reference system
+
+# Crop to a bounding box (e.g., North Dakota)
+bbox = Rasters.Extents.Extent(X = (-104.0, -96.5), Y = (45.9, 49.0))
+nd_mortality = crop(mortality_raster; to = bbox)
+
+# Reproject to Albers Equal Area
+nd_albers = resample(nd_mortality; crs = EPSG(5070))
+
+# Raster algebra: normalize to rates per 100,000
+population = Raster("population.tif")
+rate_raster = (mortality_raster ./ population) .* 100_000
+```
+
 
 ## 3.4 Spatial Statistics and Geostatistics
 
 
 ### 3.4.1 GeoStats.jl
 
-```julia
-using Rasters, RasterDataSources
-# Download and load population density raster (LandScan or WorldPop)
-# (RasterDataSources.jl handles downloads from standard repositories)
-# Load a local GeoTIFF (e.g., CDC county-level mortality raster)
-mortality_raster = Raster("county_mortality.tif")
-# Inspect
-size(mortality_raster)        # Grid dimensions
-dims(mortality_raster)        # X/Y/time dimensions
-crs(mortality_raster)         # Coordinate reference system
-# Crop to a bounding box (e.g., North Dakota)
-bbox = Rasters.Extents.Extent(X = (-104.0, -96.5), Y = (45.9, 49.0))
-nd_mortality = crop(mortality_raster; to = bbox)
-# Reproject to Albers Equal Area
-nd_albers = resample(nd_mortality; crs = EPSG(5070))
-# Raster algebra: normalize to rates per 100,000
-population = Raster("population.tif")
-rate_raster = (mortality_raster ./ population) .* 100_000
-```
-
 GeoStats.jl is an extensible framework for high-performance geostatistics in Julia, maintained by Júlio Hoffimann. It provides a unified interface to a comprehensive suite of geostatistical methods including variogram estimation, kriging (ordinary, simple, universal, indicator), simulation methods, and spatial cross-validation. GeoStats.jl is particularly valuable for population health applications that involve estimating continuous surfaces from point-sampled data — for example, estimating provider density surfaces or environmental exposure concentrations from sparse sampling points.
-
-
-### 3.4.2 Turf.jl
 
 ```julia
 using GeoStats, GeoTables
+
 # Create a GeoTable from county health data
 # GeoStats expects data wrapped in a GeoTable with associated geometries
 health_data = GeoTable(df; geometry = :geom_col)
+
 # Compute empirical variogram for cardiovascular mortality
 γ = EmpiricalVariogram(health_data, :cvd_mortality; nlags = 30)
+
 # Fit a theoretical variogram model
 fitted = fit(SphericalVariogram, γ)
+
 # Ordinary kriging interpolation to a fine grid
 problem = EstimationProblem(health_data, target_grid, :cvd_mortality)
 solver = Kriging(:cvd_mortality => (variogram = fitted,))
 solution = solve(problem, solver)
+
 # Cross-validation
 cv = LeaveOneOut()
 errors = validate(problem, solver, cv)
 ```
 
+
+### 3.4.2 Turf.jl
+
 Turf.jl is a spatial analysis library written in Julia, ported from the widely-used Turf.js JavaScript library. It provides a comprehensive set of geometric operations and spatial analysis functions including distance calculations, point-in-polygon testing, spatial clustering, polygon buffering, intersection, union, and various geometric transformations. For healthcare accessibility analysis, Turf.jl provides the building blocks for implementing floating catchment area methods and network-free accessibility measures.
+
+```julia
+using Turf
+
+# Point and feature creation
+patient = Turf.point([-97.5, 46.8])    # lon, lat for Bismarck ND area
+hospital = Turf.point([-100.7, 46.9])
+
+# Distance in kilometers
+d_km = Turf.distance(patient, hospital; units = "kilometers")
+
+# Buffer: create 30km catchment area around hospital
+catchment = Turf.buffer(hospital, 30; units = "kilometers")
+
+# Check if patient is within catchment
+within = Turf.boolean_point_in_polygon(patient, catchment)
+
+# Centroid of a county polygon
+centroid = Turf.centroid(county_polygon)
+```
 
 
 ## 3.5 Visualization and Mapping
@@ -175,43 +197,30 @@ Turf.jl is a spatial analysis library written in Julia, ported from the widely-u
 
 ### 3.5.1 GeoMakie.jl
 
-```julia
-using Turf
-# Point and feature creation
-patient = Turf.point([-97.5, 46.8])    # lon, lat for Bismarck ND area
-hospital = Turf.point([-100.7, 46.9])
-# Distance in kilometers
-d_km = Turf.distance(patient, hospital; units = "kilometers")
-# Buffer: create 30km catchment area around hospital
-catchment = Turf.buffer(hospital, 30; units = "kilometers")
-# Check if patient is within catchment
-within = Turf.boolean_point_in_polygon(patient, catchment)
-# Centroid of a county polygon
-centroid = Turf.centroid(county_polygon)
-```
-
 GeoMakie.jl is the primary cartographic visualization package in the Julia ecosystem. Built on top of the Makie.jl high-performance graphics system, GeoMakie adds geographic projections, coastlines, administrative boundaries, and spatial data rendering capabilities. It supports interactive plots (via GLMakie or WGLMakie backends) and publication-quality static maps (via CairoMakie). For healthcare GIS work, GeoMakie enables the creation of choropleth maps, dot density maps, accessibility surface maps, and multi-panel comparative geographic displays.
 
 ```julia
 using GeoMakie, CairoMakie
+
 fig = Figure(resolution = (1200, 800))
 ga = GeoAxis(fig[1,1];
-dest = "+proj=laea +lat_0=45 +lon_0=-100 +ellps=WGS84",  # Albers-like
-title = "Primary Care Health Professional Shortage Areas")
+    dest = "+proj=laea +lat_0=45 +lon_0=-100 +ellps=WGS84",  # Albers-like
+    title = "Primary Care Health Professional Shortage Areas")
+
 # Draw US state boundaries
 lines!(ga, GeoMakie.coastlines())
 poly!(ga, states_geoms; color = :white, strokecolor = :gray, strokewidth = 0.5)
+
 # Choropleth: shade counties by HPSA score
 poly!(ga, county_geoms;
-color = hpsa_scores,
-colormap = :Reds,
-colorrange = (0, 25),
-strokecolor = :white,
-strokewidth = 0.2)
-```
+    color = hpsa_scores,
+    colormap = :Reds,
+    colorrange = (0, 25),
+    strokecolor = :white,
+    strokewidth = 0.2)
 
 Colorbar(fig[1,2]; colormap = :Reds, limits = (0,25),
-
-label = "HPSA Designation Score")
+    label = "HPSA Designation Score")
 
 save("hpsa_map.pdf", fig)
+```

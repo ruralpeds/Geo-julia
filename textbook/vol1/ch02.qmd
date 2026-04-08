@@ -26,11 +26,14 @@ Julia is available for download at julialang.org. The recommended approach for s
 # Install Juliaup (cross-platform version manager)
 # macOS / Linux:
 curl -fsSL https://install.julialang.org | sh
+
 # Windows (PowerShell):
 winget install --id Julialang.Juliaup
+
 # After installation, get the latest stable Julia:
 juliaup add release
 juliaup default release
+
 # Verify installation:
 julia --version
 ```
@@ -42,22 +45,25 @@ The recommended development environment for Julia geospatial work is VS Code wit
 
 Julia's built-in package manager, Pkg.jl, manages project environments, dependencies, and package versions. Best practice for any project is to create a dedicated project environment that captures exact package versions in a Project.toml and Manifest.toml file — ensuring reproducibility across machines and over time.
 
-
-### 2.2.3 Core Julia Syntax for Spatial Analysis
-
 ```julia
 # Start Julia and enter package manager mode with ]
 julia> ]
+
 # Create and activate a new project environment
 (@v1.10) pkg> activate ./my_geo_project
+
 # Add core geospatial packages
 (@my_geo_project) pkg> add Shapefile ArchGDAL GeoDataFrames GeoStats
 (@my_geo_project) pkg> add Rasters GeoMakie CairoMakie GLMakie
 (@my_geo_project) pkg> add DataFrames CSV Statistics LinearAlgebra
 (@my_geo_project) pkg> add HTTP JSON GeoJSON Turf
+
 # Return to Julia mode
 (@my_geo_project) pkg> [backspace]
 ```
+
+
+### 2.2.3 Core Julia Syntax for Spatial Analysis
 
 Julia's syntax is concise and mathematically expressive. The following primer covers the constructs most frequently encountered in geographic analysis code.
 
@@ -65,58 +71,56 @@ Julia's syntax is concise and mathematically expressive. The following primer co
 # --- TYPES AND VARIABLES ---
 x::Float64 = 3.14159          # Explicit type annotation
 lat, lon = 47.6062, -122.3321 # Destructuring assignment
+
 # --- ARRAYS (primary data structure for rasters) ---
 grid = zeros(Float32, 1000, 1000)   # 1000x1000 raster grid
 grid[500, 500] = 1.0                 # Set center pixel
 row_sum = sum(grid; dims=2)           # Sum along columns
+
 # --- DATAFRAMES (tabular spatial data) ---
 using DataFrames, CSV
 df = CSV.read("counties.csv", DataFrame)
 rural = filter(row -> row.ruca_code >= 4, df)
+
 # --- FUNCTIONS WITH MULTIPLE DISPATCH ---
 haversine(p1::NTuple{2,Float64}, p2::NTuple{2,Float64}) = begin
-```
-
-R = 6371.0  # Earth radius in km
-
-dlat = deg2rad(p2[1] - p1[1])
-
-dlon = deg2rad(p2[2] - p1[2])
-
-a = sin(dlat/2)^2 + cos(deg2rad(p1[1])) * cos(deg2rad(p2[1])) * sin(dlon/2)^2
-
-2R * asin(sqrt(a))
-
-
-## 2.3 Julia's Performance Architecture
-
-```julia
+    R = 6371.0  # Earth radius in km
+    dlat = deg2rad(p2[1] - p1[1])
+    dlon = deg2rad(p2[2] - p1[2])
+    a = sin(dlat/2)^2 + cos(deg2rad(p1[1])) * cos(deg2rad(p2[1])) * sin(dlon/2)^2
+    2R * asin(sqrt(a))
 end
+
 # --- BROADCASTING (vectorized operations) ---
 distances = haversine.((patient_loc,), provider_locs)  # . broadcasts
+
 # --- COMPREHENSIONS ---
 catchment = [i for i in 1:n if distances[i] < 30.0]  # Within 30km
 ```
+
+
+## 2.3 Julia's Performance Architecture
 
 Understanding Julia's performance model is important for writing efficient geographic analysis code. Julia is a compiled language masquerading as an interpreted one. When a function is first called with a specific set of argument types, Julia's JIT compiler generates optimized machine code for those types and caches it. Subsequent calls with the same types execute the cached native code — often approaching hand-optimized C performance. This is the mechanism that allows Julia to be simultaneously interactive (like Python) and fast (like C).
 
 The key implication for geographic analysis is that type stability matters enormously. A Julia function is type-stable if the types of its outputs can be inferred at compile time from the types of its inputs — without needing to look at the values. Type-stable functions can be fully compiled to efficient machine code. Type-unstable functions require dynamic dispatch, which is significantly slower. When writing custom spatial statistics or raster processing functions, ensuring type stability is the most important performance optimization.
 
-
-## 2.4 Julia vs. Python/R for Geospatial Healthcare Work
-
 ```julia
 # --- TYPE-STABLE FUNCTION (fast) ---
 function moran_i(values::Vector{Float64}, W::Matrix{Float64})
-n = length(values)
-x_bar = mean(values)
-deviations = values .- x_bar
-numerator = sum(W[i,j] * deviations[i] * deviations[j]
-for i in 1:n, j in 1:n)
-denominator = sum(d^2 for d in deviations)
-(n / sum(W)) * (numerator / denominator)
+    n = length(values)
+    x_bar = mean(values)
+    deviations = values .- x_bar
+    numerator = sum(W[i,j] * deviations[i] * deviations[j]
+                    for i in 1:n, j in 1:n)
+    denominator = sum(d^2 for d in deviations)
+    (n / sum(W)) * (numerator / denominator)
 end
+
 # --- BENCHMARKING ---
 using BenchmarkTools
 @btime moran_i(values, W)   # Measure allocation-free performance
 ```
+
+
+## 2.4 Julia vs. Python/R for Geospatial Healthcare Work

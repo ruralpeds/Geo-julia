@@ -13,28 +13,34 @@ R's spatstat package — with over 2,000 functions — remains the gold standard
 
 ### 26.1.1 Complete Package Architecture
 
-
-### 26.1.2 Core Types: PointPattern and ObservationWindow
-
 ```julia
 # === src/PointPatterns.jl: Module architecture ===
+
 module PointPatterns
+
 using Statistics, LinearAlgebra, Random
 using NearestNeighbors, KernelDensity
 using DataFrames, Distributions
+
 # ── Types ─────────────────────────────────────────────────────
 export PointPattern, ObservationWindow, RectWindow, PolyWindow
+
 # ── CSR Tests ─────────────────────────────────────────────────
 export quadrat_test, clarkevans_test
+
 # ── Summary Statistics ────────────────────────────────────────
 export Kfunction, Lfunction, Gfunction, Ffunction, Jfunction
 export envelope  # Monte Carlo envelope for CSR testing
+
 # ── Intensity Estimation ──────────────────────────────────────
 export kernel_intensity, adaptive_intensity, intensity
+
 # ── Nearest Neighbor Statistics ───────────────────────────────
 export nndist, nnwhich, pairdist, crossdist
+
 # ── Cluster Detection ─────────────────────────────────────────
 export scan_statistic  # Kulldorff spatial scan
+
 include("types.jl")
 include("csr_tests.jl")
 include("kfunction.jl")
@@ -42,12 +48,19 @@ include("gfunction.jl")
 include("intensity.jl")
 include("nearest.jl")
 include("scan.jl")
+
 end
-# === src/types.jl ===
-"""
 ```
 
-PointPattern
+
+### 26.1.2 Core Types: PointPattern and ObservationWindow
+
+```julia
+# === src/types.jl ===
+
+"""
+    PointPattern
+```
 
 A spatial point pattern: a set of observed event locations within a study window.
 
@@ -59,38 +72,40 @@ A spatial point pattern: a set of observed event locations within a study window
 - `n`:       Number of events
 """
 struct PointPattern{W<:ObservationWindow}
-x      :: Vector{Float64}
-y      :: Vector{Float64}
-marks  :: Union{Nothing, DataFrame}
-window :: W
-n      :: Int
-function PointPattern(x, y, window; marks=nothing)
-length(x) == length(y) ||
-throw(DimensionMismatch("x and y must have equal length"))
-new{typeof(window)}(
-```
+    x      :: Vector{Float64}
+    y      :: Vector{Float64}
+    marks  :: Union{Nothing, DataFrame}
+    window :: W
+    n      :: Int
 
-Float64.(x), Float64.(y), marks, window, length(x)
-
-)
-
-```julia
+    function PointPattern(x, y, window; marks=nothing)
+        length(x) == length(y) ||
+            throw(DimensionMismatch("x and y must have equal length"))
+        new{typeof(window)}(
+            Float64.(x), Float64.(y), marks, window, length(x)
+        )
+    end
 end
-end
+
 """Abstract supertype for observation windows."""",
 abstract type ObservationWindow end
+
 """Rectangular observation window defined by (xmin, xmax, ymin, ymax)."""",
 struct RectWindow <: ObservationWindow
-xmin :: Float64; xmax :: Float64
-ymin :: Float64; ymax :: Float64
+    xmin :: Float64; xmax :: Float64
+    ymin :: Float64; ymax :: Float64
 end
+
 area(w::RectWindow)   = (w.xmax - w.xmin) * (w.ymax - w.ymin)
 perimeter(w::RectWindow) = 2*((w.xmax-w.xmin) + (w.ymax-w.ymin))
+
 """Check if point (x,y) is inside window."""",
 @inline inside(p::Tuple{Float64,Float64}, w::RectWindow) =
-w.xmin <= p[1] <= w.xmax && w.ymin <= p[2] <= w.ymax
+    w.xmin <= p[1] <= w.xmax && w.ymin <= p[2] <= w.ymax
+
 """Intensity of a point pattern (events per unit area)."""",
 intensity(pp::PointPattern) = pp.n / area(pp.window)
+
 """
 ```
 
@@ -102,217 +117,174 @@ Used for Monte Carlo envelope testing.
 
 ```julia
 function simulate_csr(λ::Float64, window::RectWindow;
-rng::AbstractRNG=Random.default_rng())
+                       rng::AbstractRNG=Random.default_rng())
+    A = area(window)
+    n = rand(rng, Poisson(λ * A))
+    x = window.xmin .+ (window.xmax - window.xmin) .* rand(rng, n)
+    y = window.ymin .+ (window.ymax - window.ymin) .* rand(rng, n)
+    PointPattern(x, y, window)
+end
 ```
-
-A = area(window)
-
-n = rand(rng, Poisson(λ * A))
-
-x = window.xmin .+ (window.xmax - window.xmin) .* rand(rng, n)
-
-y = window.ymin .+ (window.ymax - window.ymin) .* rand(rng, n)
-
-PointPattern(x, y, window)
 
 
 ### 26.1.3 Ripley's K-Function — The Core Test
-
-```julia
-end
-```
 
 Ripley's K-function K(r) estimates the expected number of additional events within distance r of an arbitrary event, divided by the overall intensity. Under complete spatial randomness (CSR), K(r) = πr². Clustering produces K(r) > πr², while inhibition produces K(r) < πr². The L-function L(r) = sqrt(K(r)/π) linearizes K for easier visual interpretation — under CSR, L(r) = r.
 
 ```julia
 # === src/kfunction.jl ===
-"""
-```
 
-Kfunction(pp::PointPattern; r=nothing, correction=:ripley)
+"""
+    Kfunction(pp::PointPattern; r=nothing, correction=:ripley)
 
 Estimate Ripley's K-function for a point pattern.
 
-```julia
 # Arguments
 - `pp`:         PointPattern object
 - `r`:          Vector of distances at which to evaluate K. Default: 25 values
-from 0 to 1/4 of the window diagonal.
+               from 0 to 1/4 of the window diagonal.
 - `correction`: Edge correction method:
-- `:none`:   Raw (biased) estimator — fast but biased near edges
-- `:ripley`: Ripley (1976) guard area correction — standard
-- `:isotropic`: Isotropic edge correction — more accurate for anisotropic windows
+  - `:none`:   Raw (biased) estimator — fast but biased near edges
+  - `:ripley`: Ripley (1976) guard area correction — standard
+  - `:isotropic`: Isotropic edge correction — more accurate for anisotropic windows
+
 # Returns
-```
-
 DataFrame with columns: r, K, L (= sqrt(K/π)), K_csr (= π*r²), L_csr (= r)
-
 """
-
-```julia
 function Kfunction(
-pp::PointPattern{RectWindow};
-r::Union{Nothing,AbstractVector{Float64}} = nothing,
-correction::Symbol = :ripley
-)
-n  = pp.n
-n < 2 && error("Need at least 2 points")
-```
+        pp::PointPattern{RectWindow};
+        r::Union{Nothing,AbstractVector{Float64}} = nothing,
+        correction::Symbol = :ripley
+    )
 
-A  = area(pp.window)
+    n  = pp.n
+    n < 2 && error("Need at least 2 points")
+    A  = area(pp.window)
+    λ  = n / A
 
-λ  = n / A
+    # Default r: 25 values from 0 to min_side/4
+    min_side = min(pp.window.xmax - pp.window.xmin,
+                   pp.window.ymax - pp.window.ymin)
+    r_vals   = isnothing(r) ? range(0.0, min_side/4; length=25) : r
+    r_vec    = collect(Float64, r_vals)
+    n_r      = length(r_vec)
 
-```julia
-# Default r: 25 values from 0 to min_side/4
-min_side = min(pp.window.xmax - pp.window.xmin,
-pp.window.ymax - pp.window.ymin)
-r_vals   = isnothing(r) ? range(0.0, min_side/4; length=25) : r
-r_vec    = collect(Float64, r_vals)
-n_r      = length(r_vec)
-# Build KDTree for efficient distance queries
-pts  = [pp.x pp.y]'  # 2 × n
-tree = KDTree(pts)
-```
+    # Build KDTree for efficient distance queries
+    pts  = [pp.x pp.y]'  # 2 × n
+    tree = KDTree(pts)
 
-K_vals = Vector{Float64}(undef, n_r)
+    K_vals = Vector{Float64}(undef, n_r)
 
-for (k, rk) in enumerate(r_vec)
+    for (k, rk) in enumerate(r_vec)
+        rk == 0 && (K_vals[k] = 0.0; continue)
 
-rk == 0 && (K_vals[k] = 0.0; continue)
+        count = 0.0
+        for i in 1:n
+            # Count points within rk of point i (excluding i itself)
+            idx = inrange(tree, pts[:,i], rk)
+            n_in_range = length(idx) - 1  # subtract self
 
-count = 0.0
+            if correction == :ripley
+                # Ripley's edge correction: weight each pair by the
+                # proportion of the circle of radius d_{ij} inside window
+                for j in idx
+                    j == i && continue
+                    d_ij  = sqrt((pp.x[i]-pp.x[j])^2 + (pp.y[i]-pp.y[j])^2)
+                    w_ij  = _ripley_weight(pp.x[i], pp.y[i], d_ij, pp.window)
+                    count += 1.0 / w_ij
+                end
+            else
+                count += Float64(n_in_range)
+            end
+        end
 
-for i in 1:n
+        K_vals[k] = A / (n * (n-1)) * count
+    end
 
-```julia
-# Count points within rk of point i (excluding i itself)
-idx = inrange(tree, pts[:,i], rk)
-n_in_range = length(idx) - 1  # subtract self
-if correction == :ripley
-# Ripley's edge correction: weight each pair by the
-# proportion of the circle of radius d_{ij} inside window
-for j in idx
-j == i && continue
-d_ij  = sqrt((pp.x[i]-pp.x[j])^2 + (pp.y[i]-pp.y[j])^2)
-w_ij  = _ripley_weight(pp.x[i], pp.y[i], d_ij, pp.window)
-count += 1.0 / w_ij
+    return DataFrame(
+        r     = r_vec,
+        K     = K_vals,
+        L     = sqrt.(K_vals ./ π),
+        K_csr = π .* r_vec.^2,
+        L_csr = r_vec
+    )
 end
-else
-count += Float64(n_in_range)
-end
-end
-```
 
-K_vals[k] = A / (n * (n-1)) * count
-
-```julia
-end
-return DataFrame(
-r     = r_vec,
-```
-
-K     = K_vals,
-
-L     = sqrt.(K_vals ./ π),
-
-K_csr = π .* r_vec.^2,
-
-L_csr = r_vec
-
-)
-
-```julia
-end
 # ── Ripley edge correction weight ────────────────────────────
 # Fraction of circumference of circle centered at (x,y) radius d inside window
 @inline function _ripley_weight(x,y,d,w::RectWindow)
-# Fraction in [0,1]: 1.0 = entire circle inside window
-# Approximation: proportion = 1 - (arcs outside window) / 2π
-# Simple version using proportion of window clipped
-dx_left  = x - w.xmin
-dx_right = w.xmax - x
-dy_bot   = y - w.ymin
-dy_top   = w.ymax - y
-# Compute what fraction of circle of radius d is inside rect
-prop = 1.0
-d > dx_left  && (prop -= acos(min(1.0, dx_left/d))  / π)
-d > dx_right && (prop -= acos(min(1.0, dx_right/d)) / π)
-d > dy_bot   && (prop -= acos(min(1.0, dy_bot/d))   / π)
-d > dy_top   && (prop -= acos(min(1.0, dy_top/d))   / π)
-return max(prop, 0.01)  # avoid division by zero
+    # Fraction in [0,1]: 1.0 = entire circle inside window
+    # Approximation: proportion = 1 - (arcs outside window) / 2π
+    # Simple version using proportion of window clipped
+    dx_left  = x - w.xmin
+    dx_right = w.xmax - x
+    dy_bot   = y - w.ymin
+    dy_top   = w.ymax - y
+    # Compute what fraction of circle of radius d is inside rect
+    prop = 1.0
+    d > dx_left  && (prop -= acos(min(1.0, dx_left/d))  / π)
+    d > dx_right && (prop -= acos(min(1.0, dx_right/d)) / π)
+    d > dy_bot   && (prop -= acos(min(1.0, dy_bot/d))   / π)
+    d > dy_top   && (prop -= acos(min(1.0, dy_top/d))   / π)
+    return max(prop, 0.01)  # avoid division by zero
 end
+
 # ── L-function convenience wrapper ───────────────────────────
 """Compute L(r) = sqrt(K(r)/π); deviation from r indicates clustering."""",
-```
-
 Lfunction(pp; kwargs...) = Kfunction(pp; kwargs...)
 
 """
-
-envelope(pp, stat_fn; nsim=99, alpha=0.05)
+    envelope(pp, stat_fn; nsim=99, alpha=0.05)
 
 Monte Carlo envelope for CSR testing.
-
 Simulates nsim Poisson processes; returns pointwise simulation envelopes.
-
 """
-
-```julia
 function envelope(
-pp::PointPattern,
-stat_fn::Function = Kfunction;
-nsim::Int         = 99,
-alpha::Float64    = 0.05,
-rng::AbstractRNG  = Random.default_rng()
-)
-λ_hat = intensity(pp)
-obs   = stat_fn(pp)
-r_vals = obs.r
-# Run simulations
-sim_K = Matrix{Float64}(undef, length(r_vals), nsim)
-for k in 1:nsim
-sim_pp     = simulate_csr(λ_hat, pp.window; rng)
-sim_result = stat_fn(sim_pp; r=r_vals)
-sim_K[:,k] = sim_result.K
+        pp::PointPattern,
+        stat_fn::Function = Kfunction;
+        nsim::Int         = 99,
+        alpha::Float64    = 0.05,
+        rng::AbstractRNG  = Random.default_rng()
+    )
+    λ_hat = intensity(pp)
+    obs   = stat_fn(pp)
+    r_vals = obs.r
+
+    # Run simulations
+    sim_K = Matrix{Float64}(undef, length(r_vals), nsim)
+    for k in 1:nsim
+        sim_pp     = simulate_csr(λ_hat, pp.window; rng)
+        sim_result = stat_fn(sim_pp; r=r_vals)
+        sim_K[:,k] = sim_result.K
+    end
+
+    lo_q = alpha / 2
+    hi_q = 1 - alpha / 2
+    return DataFrame(
+        r       = r_vals,
+        K_obs   = obs.K,
+        L_obs   = obs.L,
+        K_lo    = vec(mapslices(v->quantile(v,lo_q),  sim_K; dims=2)),
+        K_hi    = vec(mapslices(v->quantile(v,hi_q),  sim_K; dims=2)),
+        K_csr   = π .* r_vals.^2
+    )
 end
-lo_q = alpha / 2
-hi_q = 1 - alpha / 2
-return DataFrame(
-r       = r_vals,
 ```
-
-K_obs   = obs.K,
-
-L_obs   = obs.L,
-
-K_lo    = vec(mapslices(v->quantile(v,lo_q),  sim_K; dims=2)),
-
-K_hi    = vec(mapslices(v->quantile(v,hi_q),  sim_K; dims=2)),
-
-K_csr   = π .* r_vals.^2
-
-)
 
 
 ### 26.1.4 Kulldorff Spatial Scan Statistic
-
-```julia
-end
-```
 
 The Kulldorff spatial scan statistic is the standard method for detecting disease clusters in spatial epidemiology. It tests whether any geographic zone contains more cases than expected under the null hypothesis of spatial homogeneity, accounting for multiple testing. The scan works by defining a set of candidate zones (typically circles of varying radii centered at grid points), computing a likelihood ratio for each, and identifying the zone with the maximum likelihood ratio as the most likely cluster. Significance is assessed by Monte Carlo simulation.
 
 ```julia
 # === src/scan.jl: Kulldorff Spatial Scan Statistic ===
+
 """
-scan_statistic(cases, population, coords;
-max_pop_fraction=0.5, n_centers=100, nsim=999)
-```
+    scan_statistic(cases, population, coords;
+                   max_pop_fraction=0.5, n_centers=100, nsim=999)
 
 Kulldorff (1997) spatial scan statistic for disease cluster detection.
 
-```julia
 # Arguments
 - `cases`:             Vector of observed case counts per area
 - `population`:        Vector of at-risk population per area
@@ -320,97 +292,74 @@ Kulldorff (1997) spatial scan statistic for disease cluster detection.
 - `max_pop_fraction`:  Maximum fraction of population in scan window (default 0.5)
 - `n_centers`:         Number of candidate zone centers
 - `nsim`:              Monte Carlo simulations for p-value
+
 # Returns
-```
-
 NamedTuple with: most_likely_cluster, p_value, secondary_clusters
-
 """
-
-```julia
 function scan_statistic(
-cases::Vector{Int},
-population::Vector{Float64},
-coords::Matrix{Float64};
-max_pop_fraction::Float64 = 0.5,
-n_centers::Int            = 100,
-nsim::Int                 = 999,
-rng::AbstractRNG          = Random.default_rng()
-)
-n         = length(cases)
-```
+        cases::Vector{Int},
+        population::Vector{Float64},
+        coords::Matrix{Float64};
+        max_pop_fraction::Float64 = 0.5,
+        n_centers::Int            = 100,
+        nsim::Int                 = 999,
+        rng::AbstractRNG          = Random.default_rng()
+    )
 
-C_total   = Float64(sum(cases))
+    n         = length(cases)
+    C_total   = Float64(sum(cases))
+    P_total   = sum(population)
+    max_pop   = max_pop_fraction * P_total
 
-P_total   = sum(population)
+    # ── Build candidate zones ─────────────────────────────────
+    # For each center, consider all possible radii that include
+    # 1 to max_pop_fraction of the population
+    zones = _build_candidate_zones(coords, population, max_pop)
 
-max_pop   = max_pop_fraction * P_total
+    # ── Compute log-likelihood ratio for each zone ────────────
+    llr_obs = _max_llr(cases, population, zones, C_total, P_total)
 
-```julia
-# ── Build candidate zones ─────────────────────────────────
-# For each center, consider all possible radii that include
-# 1 to max_pop_fraction of the population
-zones = _build_candidate_zones(coords, population, max_pop)
-# ── Compute log-likelihood ratio for each zone ────────────
-llr_obs = _max_llr(cases, population, zones, C_total, P_total)
-# ── Monte Carlo p-value ────────────────────────────────────
-# Under null: cases are distributed Poisson proportional to population
-llr_sim = Vector{Float64}(undef, nsim)
-expected = population .* (C_total / P_total)
-for k in 1:nsim
-sim_cases = rand.(rng, Poisson.(expected))
-llr_sim[k] = _max_llr(sim_cases, population, zones,
-```
+    # ── Monte Carlo p-value ────────────────────────────────────
+    # Under null: cases are distributed Poisson proportional to population
+    llr_sim = Vector{Float64}(undef, nsim)
+    expected = population .* (C_total / P_total)
+    for k in 1:nsim
+        sim_cases = rand.(rng, Poisson.(expected))
+        llr_sim[k] = _max_llr(sim_cases, population, zones,
+                               Float64(sum(sim_cases)), P_total)
+    end
+    p_val = mean(llr_sim .>= llr_obs.max_llr)
 
-Float64(sum(sim_cases)), P_total)
-
-```julia
+    return (most_likely_cluster = llr_obs.best_zone,
+            llr     = llr_obs.max_llr,
+            p_value = p_val,
+            included_areas = llr_obs.best_zone_areas)
 end
-p_val = mean(llr_sim .>= llr_obs.max_llr)
-return (most_likely_cluster = llr_obs.best_zone,
-llr     = llr_obs.max_llr,
-p_value = p_val,
-included_areas = llr_obs.best_zone_areas)
-end
+
 # ── Log-likelihood ratio for Poisson model ────────────────────
 # LLR(Z) = log[(c/E)^c * ((C-c)/(C-E))^(C-c)] if c/E > (C-c)/(C-E)
 function _poisson_llr(c::Float64, C::Float64, E::Float64)::Float64
-```
-
-E <= 0 || C - E <= 0 && return 0.0
-
-c / E <= (C - c) / (C - E) && return 0.0  # Not excess risk
-
-c > 0     ? c * log(c/E)         : 0.0 +
-
-C-c > 0   ? (C-c)*log((C-c)/(C-E)) : 0.0
-
-```julia
+    E <= 0 || C - E <= 0 && return 0.0
+    c / E <= (C - c) / (C - E) && return 0.0  # Not excess risk
+    c > 0     ? c * log(c/E)         : 0.0 +
+    C-c > 0   ? (C-c)*log((C-c)/(C-E)) : 0.0
 end
+
 function _max_llr(cases, population, zones, C_total, P_total)
-max_llr = -Inf
-best_zone = -1
-best_areas = Int[]
-for (zi, zone_areas) in enumerate(zones)
-c_z = Float64(sum(cases[zone_areas]))
-p_z = sum(population[zone_areas])
-```
-
-E_z = p_z * C_total / P_total
-
-llr = _poisson_llr(c_z, C_total, E_z)
-
-if llr > max_llr
-
-max_llr = llr
-
-best_zone = zi
-
-best_areas = zone_areas
-
-```julia
-end
-end
-return (max_llr=max_llr, best_zone=best_zone, best_zone_areas=best_areas)
+    max_llr = -Inf
+    best_zone = -1
+    best_areas = Int[]
+    for (zi, zone_areas) in enumerate(zones)
+        c_z = Float64(sum(cases[zone_areas]))
+        p_z = sum(population[zone_areas])
+        E_z = p_z * C_total / P_total
+        llr = _poisson_llr(c_z, C_total, E_z)
+        if llr > max_llr
+            max_llr = llr
+            best_zone = zi
+            best_areas = zone_areas
+        end
+    end
+    return (max_llr=max_llr, best_zone=best_zone, best_zone_areas=best_areas)
 end
 ```

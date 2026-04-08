@@ -40,59 +40,59 @@ The Federal Office of Rural Health Policy (FORHP) definition combines the OMB no
 
 ```julia
 using DataFrames, CSV
-"""
-```
 
+"""
 Classify census tracts by rurality using FORHP criteria.
-
 Input DataFrame must include: fips, ruca_code, rrs_code,
-
 omb_metro_type ("metro", "micro", or "nonmetro"),
-
 area_sq_mi, population_density.
-
 """
+function classify_rural_forhp(tracts::DataFrame)::DataFrame
+    result = copy(tracts)
+    result.is_rural_forhp = falses(nrow(tracts))
+
+    for i in 1:nrow(tracts)
+        r = tracts[i, :]
+
+        # Rule 1: All non-metropolitan counties
+        if r.omb_metro_type == "nonmetro"
+            result.is_rural_forhp[i] = true
+            continue
+        end
+
+        # Rules below apply to metro counties only
+        if r.omb_metro_type != "metro"
+            continue
+        end
+
+        # Rule 2: RUCA 4-10 in metro counties
+        if r.ruca_code >= 4
+            result.is_rural_forhp[i] = true
+            continue
+        end
+
+        # Rule 3: Large sparse areas with RUCA 2-3
+        if r.ruca_code in (2, 3) &&
+           r.area_sq_mi >= 400.0 &&
+           r.population_density <= 35.0
+            result.is_rural_forhp[i] = true
+            continue
+        end
+
+        # Rule 4: Rugged areas with RUCA 2-3 (RRS = 5, area >= 20 sq mi)
+        if r.ruca_code in (2, 3) &&
+           r.rrs_code == 5 &&
+           r.area_sq_mi >= 20.0
+            result.is_rural_forhp[i] = true
+        end
+    end
+
+    return result
+end
+```
 
 
 ## 5.4 Health Disparities Facing Rural Populations
-
-```julia
-function classify_rural_forhp(tracts::DataFrame)::DataFrame
-result = copy(tracts)
-result.is_rural_forhp = falses(nrow(tracts))
-for i in 1:nrow(tracts)
-r = tracts[i, :]
-# Rule 1: All non-metropolitan counties
-if r.omb_metro_type == "nonmetro"
-result.is_rural_forhp[i] = true
-continue
-end
-# Rules below apply to metro counties only
-if r.omb_metro_type != "metro"
-continue
-end
-# Rule 2: RUCA 4-10 in metro counties
-if r.ruca_code >= 4
-result.is_rural_forhp[i] = true
-continue
-end
-# Rule 3: Large sparse areas with RUCA 2-3
-if r.ruca_code in (2, 3) &&
-r.area_sq_mi >= 400.0 &&
-r.population_density <= 35.0
-result.is_rural_forhp[i] = true
-continue
-end
-# Rule 4: Rugged areas with RUCA 2-3 (RRS = 5, area >= 20 sq mi)
-if r.ruca_code in (2, 3) &&
-r.rrs_code == 5 &&
-r.area_sq_mi >= 20.0
-result.is_rural_forhp[i] = true
-end
-end
-return result
-end
-```
 
 Rural populations in the United States bear a disproportionate burden of chronic disease, premature mortality, and limited access to high-quality care. Understanding these disparities — their magnitude, geographic distribution, and determinants — is the primary scientific motivation for rural health geographic analysis.
 
