@@ -1,0 +1,272 @@
+---
+title: "Chapter 47: Production Deployment & MLOps at Scale"
+subtitle: "Kubernetes, CI/CD, Model Monitoring, and Registry Submission"
+---
+
+# Chapter 47: Production Deployment & MLOps at Scale
+
+> "Software is eating the world. In healthcare, reliable software
+> deployments can be the difference between a patient getting the
+> right care and not getting it at all."
+>
+> — adapted from Marc Andreessen (2011)
+
+## 47.1 The Production Gap
+
+Academic models rarely reach clinicians.  The gap between a working Jupyter
+notebook and a reliable production system involves:
+
+- **Reproducibility**: Exact dependency pinning, deterministic builds
+- **Reliability**: Health checks, graceful degradation, rolling updates
+- **Observability**: Logging, metrics, distributed tracing
+- **Drift detection**: Model performance monitored in production (Vol 6 MLOps)
+- **Regulatory compliance**: HIPAA audit trails, data lineage, access controls
+
+This chapter closes the loop from the algorithms in Vols 3–6 to a
+production-ready healthcare API.
+
+## 47.2 Package Registry Submission
+
+All 11 textbook packages can be registered in a custom Julia registry,
+enabling `Pkg.add("CausalHealth")` for users.
+
+### 47.2.1 Registry Structure
+
+```
+OpenHealthcareGIS-registry/
+├── Registry.toml
+├── CausalHealth/
+│   ├── Package.toml
+│   ├── Versions.toml
+│   ├── Compat.toml
+│   └── Deps.toml
+└── GaussianProcessHealth/
+    └── ...
+```
+
+### 47.2.2 Automation
+
+```julia
+include("scripts/registry_submission.jl")
+
+# Generate all registry entries
+main(;
+    output_dir = "OpenHealthcareGIS-registry",
+    repo_root  = ".",
+    dry_run    = false,
+)
+# Generates: Registry.toml + Package/Versions/Compat/Deps.toml for each package
+# Also generates: pr_body.md for JuliaRegistries/General PR
+
+# Preview PR body
+println(generate_pr_body())
+```
+
+### 47.2.3 Installing from the Custom Registry
+
+```julia
+using Pkg
+Pkg.Registry.add(RegistrySpec(
+    url = "https://github.com/timothyhartzog/OpenHealthcareGIS-registry"
+))
+Pkg.add(["CausalHealth", "GaussianProcessHealth", "DeepHealth", "BayesianHealth"])
+```
+
+## 47.3 Kubernetes Deployment
+
+### 47.3.1 Architecture
+
+```
+Internet → NGINX Ingress (TLS) → Service (ClusterIP)
+                                      ↓
+                               Deployment (3 pods)
+                               ├── Pod 1: healthcare-gis-api
+                               ├── Pod 2: healthcare-gis-api
+                               └── Pod 3: healthcare-gis-api
+                                      ↓
+                               PVC (model storage, 10Gi)
+                                      ↓
+                               PostgreSQL + PostGIS service
+```
+
+### 47.3.2 Generating Manifests
+
+```julia
+include("scripts/k8s_deployment.jl")
+
+cfg = K8sConfig(;
+    namespace      = "healthcare-gis-prod",
+    app_name       = "healthcare-gis-api",
+    image          = "ghcr.io/timothyhartzog/geo-julia",
+    image_tag      = "v0.7.0",
+    replicas       = 3,
+    cpu_request    = "500m",
+    cpu_limit      = "2000m",
+    memory_limit   = "2Gi",
+    julia_threads  = 4,
+    ingress_host   = "api.healthcaregis.nd.gov",
+    min_replicas   = 2,
+    max_replicas   = 10,
+)
+
+paths = generate_k8s_manifests(cfg; output_dir="k8s/prod")
+# ✓ 00-namespace.yaml (8 lines)
+# ✓ 01-configmap.yaml (20 lines)
+# ✓ 03-deployment.yaml (85 lines)
+# ✓ 05-hpa.yaml (40 lines)
+# ...
+
+# Deploy
+# kubectl apply -f k8s/prod/
+```
+
+### 47.3.3 Key Production Patterns
+
+**Rolling updates** (zero-downtime deployment):
+```yaml
+strategy:
+  type: RollingUpdate
+  rollingUpdate:
+    maxSurge: 1
+    maxUnavailable: 0
+```
+
+**Startup probe** (allow up to 5 minutes for Julia JIT compilation):
+```yaml
+startupProbe:
+  httpGet:
+    path: /api/v2/health
+  initialDelaySeconds: 10
+  periodSeconds: 10
+  failureThreshold: 30   # 10s × 30 = 5 minutes
+```
+
+**Horizontal Pod Autoscaler** scales 2–10 replicas based on CPU:
+
+$$\text{desired\_replicas} = \lceil \text{current\_replicas} \times \frac{\text{current\_CPU}}{\text{target\_CPU}} \rceil$$
+
+## 47.4 CI/CD Pipeline
+
+### 47.4.1 GitHub Actions Workflow
+
+```yaml
+# .github/workflows/deploy.yml (excerpt)
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: julia-actions/setup-julia@v2
+        with: { version: "1.10" }
+      - run: julia --project=. -e 'import Pkg; Pkg.test()'
+
+  build:
+    needs: test
+    steps:
+      - uses: docker/build-push-action@v5
+        with:
+          push: true
+          tags: ghcr.io/timothyhartzog/geo-julia:${{ github.ref_name }}
+
+  deploy:
+    needs: build
+    environment: production
+    steps:
+      - run: |
+          kubectl -n healthcare-gis set image \
+            deployment/healthcare-gis-api \
+            healthcare-gis-api=ghcr.io/timothyhartzog/geo-julia:${{ github.ref_name }}
+          kubectl -n healthcare-gis rollout status deployment/healthcare-gis-api
+```
+
+```julia
+# Generate the full CD workflow
+cfg = K8sConfig()
+generate_github_workflow_cd(cfg; output_path=".github/workflows/deploy.yml")
+```
+
+## 47.5 Benchmarking
+
+Before deploying, benchmark all algorithms on production-representative data:
+
+```julia
+include("scripts/benchmark_suite.jl")
+
+results = run_benchmark_suite(; quick=false)
+# Prints cross-volume timing table:
+# ┌─ Linear Algebra
+# │  Cholesky (GP)                    100×100      0.04 ms      0.06 ms  —
+# │  SVD                              100×100      0.29 ms      0.35 ms  —
+# ┌─ Gaussian Processes
+# │  Exact GP                         n=50         0.8 ms       1.1 ms   —
+# │  Exact GP                         n=100        5.2 ms       6.8 ms   —
+# ┌─ Deep Learning
+# │  MLP forward (h=32)               100×8×32     0.02 ms      0.03 ms  —
+```
+
+### Performance Targets
+
+| API endpoint | Latency p95 | Throughput |
+|-------------|-------------|-----------|
+| `/api/v2/health` | < 5 ms | > 1000 RPS |
+| `/api/v2/catchment/50` | < 100 ms | > 50 RPS |
+| `/api/v2/state` | < 500 ms | > 10 RPS |
+| `/api/v2/events` (SSE) | streaming | N/A |
+
+## 47.6 Production Monitoring
+
+Combine the MLOps drift detection from Vol 6 with the deployment:
+
+```julia
+# Scheduled job: every 30 minutes
+include("vol6_advanced_inference/scripts/mlops_pipeline.jl")
+
+function production_health_check(registry, X_reference, X_recent)
+    # 1. Drift detection
+    drift = detect_drift(X_reference, X_recent; feature_names=feature_names)
+    n_drifted = sum(d.drifted for d in drift)
+    println("Features drifted: $n_drifted / $(length(drift))")
+
+    # 2. Performance check
+    trigger = RetrainingTrigger(0.15, 0.1, 100)
+    result = should_retrain(trigger, drift, current_rmse, baseline_rmse, n_new_samples)
+
+    if result.should_retrain
+        println("ALERT: Retraining triggered — $(result.reason)")
+        # Trigger retraining pipeline via CI/CD
+    end
+end
+```
+
+## 47.7 Summary: From Algorithm to Production
+
+The complete journey of a healthcare access model:
+
+```
+Vol 3: Spatial data → E2SFCA access scores (geographic features)
+Vol 4: Spatial stats → Hot-spot detection, autocorrelation
+Vol 5: ML models → RF/GBM predictions, feature engineering
+Vol 6: Causal inference → Policy effect estimation (DiD, IV)
+Vol 6: GP regression → Uncertainty-quantified access surfaces
+Vol 6: MLOps → Drift detection, A/B testing, model registry
+Vol 7: Deep learning → MLP/GNN/TabNet for complex patterns
+Vol 7: Bayesian → Full posterior inference, model comparison
+Vol 7: Production → K8s deployment, CI/CD, benchmarking
+```
+
+Every algorithm in this textbook is:
+- **Implemented** in pure Julia (no opaque black boxes)
+- **Tested** with 15–20 unit tests per package
+- **Documented** with Documenter.jl API references
+- **Benchmarked** against each other
+- **Deployable** via the K8s manifests and CI/CD workflows in this chapter
+
+## References
+
+- Burns, B., Grant, B., Oppenheimer, D., Brewer, E., & Wilkes, J. (2016).
+  Borg, Omega, and Kubernetes. *ACM Queue*, 14(1), 70–93.
+- Sculley, D., et al. (2015). Hidden technical debt in machine learning systems.
+  *NeurIPS 28*, 2503–2511.
+- Kluyver, T., et al. (2016). Jupyter Notebooks: A publishing format for
+  reproducible computational workflows. *ELPUB*, 87–90.
+- Wilson, G., et al. (2014). Best practices for scientific computing.
+  *PLOS Biology*, 12(1), e1001745.

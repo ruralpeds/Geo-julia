@@ -1,0 +1,65 @@
+name: Vol 6 Tests
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths:
+      - "vol6_advanced_inference/**"
+      - ".github/workflows/test_vol6.yml"
+  pull_request:
+    paths:
+      - "vol6_advanced_inference/**"
+
+jobs:
+  test-causalhealth:
+    name: CausalHealth.jl — Julia ${{ matrix.julia-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ["1.10", "1.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - run: |
+          julia --project=vol6_advanced_inference/packages/CausalHealth \
+            -e 'import Pkg; Pkg.instantiate(); Pkg.test()'
+
+  test-gphealth:
+    name: GaussianProcessHealth.jl — Julia ${{ matrix.julia-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ["1.10", "1.11"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+      - uses: julia-actions/cache@v2
+      - run: |
+          julia --project=vol6_advanced_inference/packages/GaussianProcessHealth \
+            -e 'import Pkg; Pkg.instantiate(); Pkg.test()'
+
+  test-integration:
+    name: Vol 6 Integration
+    runs-on: ubuntu-latest
+    needs: [test-causalhealth, test-gphealth]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.10"
+      - uses: julia-actions/cache@v2
+      - run: |
+          for pkg in CausalHealth GaussianProcessHealth; do
+            julia --project=vol6_advanced_inference/packages/$pkg \
+              -e 'import Pkg; Pkg.instantiate()'
+          done
+      - run: |
+          julia --project=vol6_advanced_inference/packages/CausalHealth \
+            vol6_advanced_inference/test/integration_test.jl

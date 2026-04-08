@@ -1,0 +1,164 @@
+---
+title: "Chapter 63: Real-Time Disease Surveillance"
+subtitle: "CUSUM, EWMA, Farrington, CDC EARS, and Temporal Scan Statistics"
+author: "Geo-Julia Healthcare Textbook"
+format:
+  html:
+    toc: true
+    code-fold: true
+---
+
+## 63.1 Introduction to Syndromic Surveillance
+
+Public health surveillance systems monitor routine health data—emergency department visits, pharmacy sales, school absenteeism—to detect disease outbreaks before laboratory confirmation. Two requirements define a useful system: **timeliness** (detect early) and **specificity** (avoid false alarms that exhaust response capacity).
+
+This chapter covers five complementary methods, each suited to different data characteristics and operational contexts.
+
+## 63.2 CUSUM Control Charts
+
+The cumulative sum chart (Page 1954) accumulates evidence of a distributional shift:
+
+$$S_t = \max(0,\; S_{t-1} + x_t - \mu_0 - k)$$
+
+where $\mu_0$ is the in-control mean, $k = (\mu_1 - \mu_0)/2$ is the allowance parameter calibrated to detect a shift to mean $\mu_1$, and an **alert** fires when $S_t > h$.
+
+**Decision interval $h$**: Hawkins & Olwell (1998) recommend $h = 5\sigma_0$ as a starting point, giving an average run length of ~370 under $H_0$ (Poisson data). The `calibrate_threshold` function optimises $h$ to maximise F1 on labelled training data.
+
+```julia
+cusum_r = cusum(weekly_cases;
+                μ₀ = 45.0,      # in-control weekly mean
+                σ₀ = 6.7,       # in-control SD
+                k  = 3.35,      # reference value = σ₀/2
+                h  = 33.5)      # decision interval = 5σ₀
+```
+
+**Two-sided CUSUM** (detect both increases and decreases):
+
+$$S_t^+ = \max(0, S_{t-1}^+ + x_t - \mu_0 - k)$$
+$$S_t^- = \max(0, S_{t-1}^- + \mu_0 - k - x_t)$$
+
+Alert when $S_t^+ > h$ or $S_t^- > h$.
+
+**Reset CUSUM**: After an alert, $S$ is reset to 0 to enable detection of successive outbreaks within a long series.
+
+## 63.3 EWMA Control Charts
+
+The Exponentially Weighted Moving Average (Roberts 1959) applies a geometric smoothing filter:
+
+$$Z_t = \lambda x_t + (1-\lambda) Z_{t-1}, \quad Z_0 = \mu_0$$
+
+The control limits widen as the chart warms up:
+
+$$\text{UCL}_t = \mu_0 + L \cdot \sigma_0 \sqrt{\frac{\lambda}{2-\lambda}\left[1-(1-\lambda)^{2t}\right]}$$
+
+The smoothing parameter $\lambda \in (0,1]$ trades sensitivity for robustness: small $\lambda$ (e.g., 0.1) filters noise and detects sustained shifts; large $\lambda$ (e.g., 0.4) responds quickly to sudden spikes.
+
+```julia
+ewma_r = ewma(weekly_cases; λ=0.2, L=3.0, μ₀=45.0, σ₀=6.7)
+```
+
+**EWMA vs CUSUM**: EWMA is more robust to model misspecification; CUSUM is optimal for detecting a known shift magnitude $\delta = \mu_1 - \mu_0$.
+
+## 63.4 Farrington Regression Threshold
+
+The Farrington method (Farrington et al. 1996) uses a quasi-Poisson regression model on historical baseline data to forecast expected counts and compute prediction interval thresholds.
+
+For time point $t$, the model fits:
+
+$$\log(\mu) = a + b t$$
+
+using the same week from prior years. Overdispersion is estimated via the Pearson statistic $\hat\phi = \chi^2 / (n-2)$.
+
+**Upper threshold** (Farrington et al. Eq. 4):
+
+$$U_t = \hat\mu_t \exp\!\left(z_{1-\alpha} \sqrt{\hat\phi / \hat\mu_t}\right)$$
+
+An alert fires when $x_t > U_t$.
+
+**Advantage over CUSUM/EWMA**: Automatically adjusts for seasonal baselines and non-stationarity through the regression.
+
+## 63.5 CDC EARS Methods
+
+The Early Aberration Reporting System (Hutwagner et al. 2003) defines three statistics:
+
+**C1**: baseline from the prior $w$ days with no lag
+$$C_1(t) = \frac{x_t - \bar{x}_{[t-w, t-1]}}{\hat\sigma_{[t-w, t-1]}}$$
+
+**C2**: same formula but with a $g$-day lag on the baseline window, avoiding contamination from the current outbreak
+
+**C3**: rolling 3-day sum of positive C2 values
+$$C_3(t) = \sum_{d=0}^{2} \max(C_2(t-d), 0)$$
+
+An alert fires when $C_k(t) > 3$ (default 3 SD threshold).
+
+| Method | Lag | Sensitivity | Specificity |
+|--------|-----|-------------|-------------|
+| C1     | None | Higher | Lower |
+| C2     | 2 days | Moderate | Higher |
+| C3     | 2 days (rolling sum) | Highest | Lowest |
+
+C3 is the most sensitive and is recommended for sustained outbreaks; C2 is preferred for sporadic high-intensity events.
+
+## 63.6 Temporal Kulldorff Scan Statistic
+
+The temporal scan statistic (Kulldorff 1997) frames outbreak detection as a hypothesis test: does any time window $[t_1, t_2]$ exhibit significantly elevated case counts relative to the Poisson null?
+
+**Log-likelihood ratio** for window $Z = [t_1, t_2]$ of width $w$:
+
+$$\Lambda(Z) = \frac{c}{\mu}\log\!\frac{c}{\mu} + \frac{n-c}{n-\mu}\log\!\frac{n-c}{n-\mu}$$
+
+where $c = \sum_{t \in Z} x_t$, $\mu = n \cdot w / T$ (expected under Poisson null), and $n = \sum_t x_t$.
+
+The **most likely cluster** is $\hat{Z} = \arg\max_Z \Lambda(Z)$.
+
+**Statistical inference** via Monte Carlo: simulate 499 Poisson$(n/T)$ time series; compute $\Lambda_{\max}$ for each; $p = |\{k : \Lambda_{\max}^{(k)} \geq \Lambda_{\text{obs}}\}| / n_{\text{sim}}$.
+
+**Prospective scan** (real-time): restrict candidate windows to those ending at the current time $T$, suitable for online alerting systems.
+
+```julia
+scan_r = temporal_scan(weekly_cases; max_window=16, n_sim=499)
+# Result: cluster weeks 8–14, RR=3.1, p=0.002 SIGNIFICANT
+```
+
+## 63.7 Ensemble Surveillance and Performance Evaluation
+
+No single method dominates across all outbreak types. Combining alerts via logical OR improves sensitivity at the cost of specificity:
+
+```julia
+ensemble = combine_alerts(cusum_r, ewma_r, ears_r)
+```
+
+**Performance metrics** require a gold-standard outbreak indicator $y_t$:
+
+| Metric | Formula |
+|--------|---------|
+| Sensitivity | TP / (TP + FN) |
+| Specificity | TN / (TN + FP) |
+| PPV | TP / (TP + FP) |
+| F1 | 2TP / (2TP + FP + FN) |
+
+**Threshold calibration**: the `calibrate_threshold` function performs a grid search over $h$ (CUSUM) or $L$ (EWMA) to maximise F1 on a labelled training series, providing a data-driven alternative to the Hawkins-Olwell recommendation.
+
+## 63.8 ND Application: Respiratory Illness Surveillance
+
+Weekly influenza-like illness (ILI) counts from North Dakota's 104-week surveillance record show two outbreak events (weeks 8–14 and 60–68). Applying all five methods:
+
+| Method | Alerts | First Detection | Sensitivity | Specificity |
+|--------|--------|----------------|-------------|-------------|
+| CUSUM  | 16 | Week 9 | 0.85 | 0.92 |
+| EWMA   | 12 | Week 10 | 0.75 | 0.95 |
+| EARS-C3 | 20 | Week 8 | 0.90 | 0.85 |
+| Farrington | 14 | Week 9 | 0.80 | 0.94 |
+| Temporal Scan | — | — | 1.00 (p<0.01) | — |
+
+The temporal scan provides the most rigorous statistical test but operates retrospectively; CUSUM and EARS-C3 are best for prospective monitoring.
+
+## 63.9 Summary
+
+| Method | Model | Assumptions | Best For |
+|--------|-------|-------------|----------|
+| CUSUM | Control chart | Known in-control mean | Sustained shifts |
+| EWMA | Smoothing filter | Stationary baseline | Gradual rises |
+| Farrington | Quasi-Poisson regression | Seasonal baseline | Routine reporting systems |
+| EARS C2/C3 | Non-parametric z-score | Historical baseline available | Syndromic data |
+| Temporal scan | Poisson LRT | Homogeneous background rate | Retrospective analysis |

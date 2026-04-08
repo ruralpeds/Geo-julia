@@ -1,0 +1,15 @@
+name = "HealthcareGeoWorkspace"
+uuid = "b2c3d4e5-f6a7-8901-bcde-f23456789012"
+authors = ["HealthcareGeo Contributors"]
+version = "0.2.0"
+
+[deps]
+HealthcareGeo = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+SpatialStats = "c3d4e5f6-a7b8-9012-cdef-345678901234"
+PopulationData = "d4e5f6a7-b8c9-0123-defa-456789012345"
+
+[compat]
+julia = "1.9"
+
+[workspace]
+packages = ["packages/HealthcareGeo", "packages/SpatialStats", "packages/PopulationData"]

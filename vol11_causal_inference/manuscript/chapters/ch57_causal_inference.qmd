@@ -1,0 +1,258 @@
+---
+title: "Chapter 57: Propensity Score Methods for Causal Inference"
+subtitle: "IPW · AIPW · Overlap Weighting · Nearest-Neighbour Matching"
+author: "Open Healthcare Textbook"
+format:
+  html:
+    toc: true
+    code-fold: true
+    theme: cosmo
+  pdf:
+    toc: true
+    number-sections: true
+---
+
+## Learning Objectives
+
+After completing this chapter you should be able to:
+
+- Define the potential outcomes framework and the fundamental problem of causal inference
+- Estimate propensity scores via logistic regression and assess common support
+- Apply inverse probability weighting (IPW), augmented IPW, and overlap weighting
+- Implement nearest-neighbour matching with caliper and evaluate balance
+- Choose among estimators based on the target estimand (ATE, ATT, ATO)
+
+---
+
+## 57.1 The Potential Outcomes Framework
+
+Let $Y_i(1)$ and $Y_i(0)$ denote the **potential outcomes** for unit $i$ under
+treatment ($D_i=1$) and control ($D_i=0$) respectively (Rubin, 1974). We observe
+only $Y_i = D_i Y_i(1) + (1-D_i) Y_i(0)$.
+
+Key estimands:
+$$
+\text{ATE} = \mathrm{E}[Y(1) - Y(0)]
+$$
+$$
+\text{ATT} = \mathrm{E}[Y(1) - Y(0) \mid D=1]
+$$
+$$
+\text{ATO} = \mathrm{E}[e(X)(1-e(X))(Y(1)-Y(0))]
+$$
+
+where $e(\mathbf{x}) = P(D=1 \mid X=\mathbf{x})$ is the **propensity score**.
+
+### 57.1.1 Identification
+
+Under **strong ignorability** (Rosenbaum & Rubin, 1983):
+1. **Unconfoundedness**: $\{Y(1), Y(0)\} \perp D \mid X$
+2. **Overlap**: $0 < e(\mathbf{x}) < 1$ for all $\mathbf{x}$
+
+the ATE is identified from observational data:
+
+$$
+\text{ATE} = \mathrm{E}\!\left[\frac{DY}{e(X)} - \frac{(1-D)Y}{1-e(X)}\right]
+$$
+
+---
+
+## 57.2 Propensity Score Estimation
+
+### 57.2.1 Logistic Regression
+
+The log-likelihood:
+$$
+\ell(\boldsymbol{\beta}) = \sum_i \left[D_i \mathbf{x}_i^\top\boldsymbol{\beta} - \log(1 + e^{\mathbf{x}_i^\top\boldsymbol{\beta}})\right]
+$$
+
+Maximised via Newton-Raphson: $\boldsymbol{\beta} \leftarrow \boldsymbol{\beta} - \mathbf{H}^{-1}\nabla\ell$
+
+where $\nabla\ell = \mathbf{X}^\top(\mathbf{D} - \hat{\mathbf{p}})$ and
+$\mathbf{H} = -\mathbf{X}^\top\mathbf{W}\mathbf{X}$, $\mathbf{W}=\text{diag}(\hat{p}_i(1-\hat{p}_i))$.
+
+A small ridge penalty $\lambda\|\boldsymbol{\beta}\|^2$ improves numerical stability in
+high-dimensional settings without meaningfully biasing the estimated scores.
+
+```julia
+ps_model = ps_fit(D, X; feature_names=fnames, λ=1e-4)
+p̂ = ps_predict(ps_model, X)
+```
+
+### 57.2.2 Common Support Trimming
+
+Crump et al. (2009) recommend trimming to the **common support**:
+$$
+\{i: \alpha \le \hat{e}(\mathbf{x}_i) \le 1-\alpha\}
+$$
+
+with $\alpha = 0.1$ for the ATE. Trimming removes units whose counterfactual
+is poorly supported by data, at the cost of changing the target estimand to the
+"overlap population".
+
+### 57.2.3 Overlap Diagnostics
+
+- **PS histogram** by treatment arm: should have substantial overlap
+- **Effective sample sizes**: $n_{\mathrm{eff}} = (\sum_i w_i)^2 / \sum_i w_i^2$
+- Severe imbalance indicates strong confounding; consider doubly-robust methods
+
+---
+
+## 57.3 Inverse Probability Weighting
+
+### 57.3.1 Horwitz-Thompson Estimator
+
+$$
+\hat{\tau}_{HT} = \frac{1}{n}\sum_i \left[\frac{D_i Y_i}{\hat{e}(\mathbf{x}_i)} - \frac{(1-D_i)Y_i}{1-\hat{e}(\mathbf{x}_i)}\right]
+$$
+
+Unbiased but can have high variance due to extreme weights.
+
+### 57.3.2 Hajek (Normalised) Estimator
+
+$$
+\hat{\tau}_{Haj} = \frac{\sum_i D_i Y_i/\hat{e}_i}{\sum_i D_i/\hat{e}_i} - \frac{\sum_i (1-D_i)Y_i/(1-\hat{e}_i)}{\sum_i (1-D_i)/(1-\hat{e}_i)}
+$$
+
+Normalisation reduces sensitivity to extreme weights. Preferred in practice.
+
+```julia
+res = ipw_ate(D, y, p̂; estimator=:hajek, n_boot=200)
+```
+
+### 57.3.3 Stabilised Weights
+
+Multiplying by the marginal treatment probability:
+$$
+w_i = \frac{D_i \bar{p}}{\hat{e}_i} + \frac{(1-D_i)(1-\bar{p})}{1-\hat{e}_i}
+$$
+
+keeps the effective sample size close to $n$ and reduces variance.
+
+---
+
+## 57.4 Doubly-Robust AIPW
+
+The **Augmented IPW (AIPW)** estimator (Robins et al., 1994) combines propensity
+score and outcome models:
+
+$$
+\hat{\tau}_{AIPW} = \frac{1}{n}\sum_i \left[\hat{\mu}_1(\mathbf{x}_i) - \hat{\mu}_0(\mathbf{x}_i)
++ \frac{D_i(Y_i - \hat{\mu}_1(\mathbf{x}_i))}{\hat{e}(\mathbf{x}_i)}
+- \frac{(1-D_i)(Y_i - \hat{\mu}_0(\mathbf{x}_i))}{1-\hat{e}(\mathbf{x}_i)}\right]
+$$
+
+where $\hat{\mu}_d(\mathbf{x})$ is the fitted outcome model in arm $d$.
+
+**Double robustness**: $\hat{\tau}_{AIPW}$ is consistent if **either** the PS
+model or the outcome model is correctly specified (but not necessarily both).
+This property is crucial for healthcare applications where model misspecification
+is common.
+
+```julia
+res = aipw_ate(D, y, p̂, X; n_boot=200)
+```
+
+---
+
+## 57.5 Overlap Weighting
+
+Li et al. (2018) propose overlap weights $w_i = e_i(1-e_i)$ that:
+
+- Achieve the minimum asymptotic variance for the ATO estimand
+- Require no trimming (zero weight at boundaries)
+- Balance covariates exactly when the PS model is linear in $X$
+
+$$
+\hat{\tau}_{OW} = \frac{\sum_i e_i(1-e_i) D_i Y_i / e_i}{\sum_i e_i(1-e_i) D_i / e_i} - \frac{\sum_i e_i(1-e_i)(1-D_i) Y_i / (1-e_i)}{\sum_i e_i(1-e_i)(1-D_i)/(1-e_i)}
+$$
+
+Particularly useful when substantial PS overlap is lacking.
+
+---
+
+## 57.6 Nearest-Neighbour Matching
+
+### 57.6.1 Greedy Matching with Caliper
+
+For each treated unit $i$, find the nearest control unit(s) within caliper
+$\delta$ (maximum allowed PS distance):
+
+1. Sort treated units by PS
+2. For each treated unit: find $k$ controls with $|\hat{e}_i - \hat{e}_j| \le \delta$
+3. Caliper default: $\delta = 0.2 \cdot \text{SD}(\hat{e})$ (Austin, 2011)
+
+The ATT estimator:
+$$
+\hat{\tau}_{match} = \frac{1}{N_1}\sum_{i: D_i=1} \left[Y_i - \frac{1}{k}\sum_{j \in \mathcal{M}(i)} Y_j\right]
+$$
+
+```julia
+mr  = nn_match(D, y, p̂, X; k=1, n_boot=200)
+tbl = balance_table(mr, feature_names)
+```
+
+### 57.6.2 Covariate Balance Assessment
+
+The **Standardised Mean Difference (SMD)**:
+$$
+\text{SMD}_j = \frac{|\bar{X}_{1j} - \bar{X}_{0j}|}{\sqrt{(S_{1j}^2 + S_{0j}^2)/2}}
+$$
+
+Rule of thumb: SMD < 0.1 after matching indicates adequate balance (Stuart, 2010).
+
+---
+
+## 57.7 Estimand Choice in Healthcare Applications
+
+| Estimand | Weights | When to use |
+|----------|---------|-------------|
+| ATE | $1/e$ and $1/(1-e)$ | Mandatory population-wide policy |
+| ATT | Treated: 1; control: $e/(1-e)$ | Optional programme (who enrolled matters) |
+| ATO | $e(1-e)$ | Equipoise population; better power |
+
+In ND rural healthcare access studies, the **ATT** is most relevant: we want to
+estimate the effect on counties that actually received the intervention.
+
+---
+
+## Summary
+
+| Method | Estimand | Doubly Robust | Key Assumption |
+|--------|----------|---------------|----------------|
+| HT IPW | ATE | No | Correct PS model |
+| Hajek IPW | ATE | No | Correct PS model |
+| AIPW | ATE | Yes | PS or outcome model correct |
+| Overlap | ATO | No | Correct PS model |
+| NN Matching | ATT | No | Common support |
+
+---
+
+## Exercises
+
+1. Show that the Hajek estimator can be written as a weighted regression of $Y$
+   on $D$ with weights $w_i = D_i/\hat{e}_i + (1-D_i)/(1-\hat{e}_i)$.
+
+2. Implement a **trimming rule** based on the Crump et al. (2009) optimal
+   threshold: $\alpha^* = \arg\min \text{Var}(\hat{\tau})$.
+
+3. Modify `aipw_ate` to use a random forest for the outcome model instead of
+   OLS. Does double robustness hold when the outcome model is nonparametric?
+
+4. Apply the full pipeline to HCUP State Inpatient Databases: estimate the ATT
+   of Medicaid expansion on preventable hospitalisation rates.
+
+---
+
+## References
+
+- Li, F., Morgan, K. L., & Zaslavsky, A. M. (2018). Balancing covariates via
+  propensity score weighting. *Journal of the American Statistical Association*,
+  113(521), 390–400.
+- Robins, J. M., Rotnitzky, A., & Zhao, L. P. (1994). Estimation of regression
+  coefficients when some regressors are not always observed. *Journal of the
+  American Statistical Association*, 89(427), 846–866.
+- Rosenbaum, P. R., & Rubin, D. B. (1983). The central role of the propensity
+  score in observational studies for causal effects. *Biometrika*, 70(1), 41–55.
+- Stuart, E. A. (2010). Matching methods for causal inference: A review and a
+  look forward. *Statistical Science*, 25(1), 1–21.

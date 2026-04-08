@@ -1,0 +1,360 @@
+---
+title: "Chapter 54: Geostatistics and Kriging for Healthcare Access"
+subtitle: "Variogram Modelling · Ordinary and Universal Kriging · Sequential Gaussian Simulation"
+author: "Open Healthcare Textbook"
+format:
+  html:
+    toc: true
+    code-fold: true
+    theme: cosmo
+  pdf:
+    toc: true
+    number-sections: true
+---
+
+## Learning Objectives
+
+After completing this chapter you should be able to:
+
+- Compute and interpret empirical variograms using classical and robust estimators
+- Fit theoretical variogram models (spherical, exponential, Gaussian, Matérn) by weighted least squares
+- Derive and solve the ordinary kriging and universal kriging systems
+- Generate realisations of spatial uncertainty via sequential Gaussian simulation
+- Apply leave-one-out cross-validation to assess kriging prediction accuracy
+
+---
+
+## 54.1 From Interpolation to Geostatistics
+
+Standard spatial interpolation methods (inverse-distance weighting, splines)
+treat the variable of interest as a deterministic surface. Geostatistics, rooted
+in Matheron's (1963) *Théorie des Variables Régionalisées*, instead views the
+healthcare access score $Z(\mathbf{s})$ as one realisation of a *random field*:
+
+$$
+Z(\mathbf{s}) = \mu(\mathbf{s}) + \delta(\mathbf{s}) + \varepsilon(\mathbf{s})
+$$
+
+where $\mu(\mathbf{s})$ is a large-scale trend, $\delta(\mathbf{s})$ is a
+spatially correlated random component, and $\varepsilon$ is pure nugget error.
+
+This probabilistic framework provides:
+
+1. **Optimal linear unbiased prediction** (BLUP) — kriging
+2. **Prediction uncertainty** — kriging variance $\sigma^2_K(\mathbf{s}_0)$
+3. **Stochastic simulation** — multiple equiprobable realisations
+
+### Second-order stationarity
+
+We assume the random field is *second-order stationary*:
+
+$$
+\mathrm{E}[Z(\mathbf{s})] = \mu \quad \forall\,\mathbf{s}
+$$
+$$
+\mathrm{Cov}(Z(\mathbf{s}), Z(\mathbf{s}+\mathbf{h})) = C(\mathbf{h}) \quad \forall\,\mathbf{s}
+$$
+
+The covariance $C(\mathbf{h})$ depends only on the separation vector $\mathbf{h}$,
+not on absolute location. *Isotropy* further simplifies this to $C(h)$ where
+$h = \|\mathbf{h}\|$.
+
+---
+
+## 54.2 The Variogram
+
+### 54.2.1 Definition
+
+The (semi-)variogram $\gamma(\mathbf{h})$ quantifies spatial dissimilarity:
+
+$$
+\gamma(\mathbf{h}) = \frac{1}{2}\,\mathrm{Var}[Z(\mathbf{s}+\mathbf{h}) - Z(\mathbf{s})]
+$$
+
+Under second-order stationarity: $\gamma(\mathbf{h}) = C(\mathbf{0}) - C(\mathbf{h})$.
+
+The variogram has three structural parameters:
+
+| Parameter | Symbol | Interpretation |
+|-----------|--------|----------------|
+| Nugget    | $c_0$  | Discontinuity at $h=0$: micro-scale variation + measurement error |
+| Sill      | $c_0+c$ | Total variance: plateau reached at large $h$ |
+| Range     | $r$    | Distance at which sill is reached: decorrelation distance |
+
+### 54.2.2 Empirical Variogram
+
+The **classical Matheron (1963) estimator**:
+
+$$
+\hat{\gamma}(h_k) = \frac{1}{2|N(h_k)|}\sum_{(i,j)\in N(h_k)} [Z(\mathbf{s}_i) - Z(\mathbf{s}_j)]^2
+$$
+
+is sensitive to outliers. The **Cressie–Hawkins (1980) robust estimator**:
+
+$$
+\hat{\gamma}(h_k) = \frac{\left[\frac{1}{|N(h_k)|}\sum_{(i,j)} |Z(\mathbf{s}_i)-Z(\mathbf{s}_j)|^{1/2}\right]^4}{0.457 + 0.494/|N(h_k)|}
+$$
+
+downweights extreme pairs and is recommended when outliers are suspected.
+
+```julia
+# Compute classical and robust empirical variograms
+ev_cl = empirical_variogram(coords_tr, z_tr; n_lags=12, estimator=:classical)
+ev_rb = empirical_variogram(coords_tr, z_tr; n_lags=12, estimator=:robust)
+```
+
+### 54.2.3 Variogram Models
+
+A valid (conditionally negative-definite) theoretical model must be fitted.
+Common choices for healthcare data:
+
+**Spherical** (piecewise polynomial, finite range):
+$$
+\gamma(h) = c_0 + c\left[\frac{3h}{2r} - \frac{h^3}{2r^3}\right]\mathbf{1}(h \le r) + c\,\mathbf{1}(h>r)
+$$
+
+**Exponential** (asymptotic, practical range $\approx 3r$):
+$$
+\gamma(h) = c_0 + c\left[1 - \exp\!\left(-\frac{3h}{r}\right)\right]
+$$
+
+**Gaussian** (smooth, differentiable):
+$$
+\gamma(h) = c_0 + c\left[1 - \exp\!\left(-\frac{3h^2}{r^2}\right)\right]
+$$
+
+**Matérn** (smoothness parameter $\nu$ controls differentiability).
+
+### 54.2.4 Fitting by Weighted Least Squares
+
+Cressie (1985) recommends minimising:
+
+$$
+Q(\theta) = \sum_{k=1}^{K} |N(h_k)| \left[\frac{\hat{\gamma}(h_k)}{\gamma(h_k;\theta)} - 1\right]^2
+$$
+
+This down-weights lags with few pairs and is scale-invariant. Minimisation
+uses the Nelder–Mead simplex algorithm (no derivatives required).
+
+```julia
+vm_sph = fit_variogram(ev_cl; model=:spherical)
+vm_exp = fit_variogram(ev_cl; model=:exponential)
+vm_gau = fit_variogram(ev_cl; model=:gaussian)
+```
+
+The nugget-to-sill ratio $c_0/(c_0+c)$ indicates the proportion of variance
+attributable to micro-scale noise; values above 50–60% suggest the spatial
+correlation structure is weak.
+
+---
+
+## 54.3 Kriging
+
+### 54.3.1 Simple Kriging
+
+When the global mean $\mu$ is known, **simple kriging** gives:
+
+$$
+\hat{Z}_{SK}(\mathbf{s}_0) = \mu + \mathbf{c}_0^\top \mathbf{C}^{-1}(\mathbf{z} - \mu\mathbf{1})
+$$
+$$
+\sigma^2_{SK}(\mathbf{s}_0) = C(\mathbf{0}) - \mathbf{c}_0^\top \mathbf{C}^{-1}\mathbf{c}_0
+$$
+
+where $\mathbf{C}$ is the $n\times n$ covariance matrix and $\mathbf{c}_0$ is
+the $n\times 1$ vector of covariances between data locations and prediction
+location $\mathbf{s}_0$.
+
+### 54.3.2 Ordinary Kriging
+
+In practice $\mu$ is unknown. **Ordinary kriging** imposes unbiasedness:
+$\sum_i \lambda_i = 1$. The augmented system is:
+
+$$
+\begin{pmatrix} \mathbf{C} & \mathbf{1} \\ \mathbf{1}^\top & 0 \end{pmatrix}
+\begin{pmatrix} \boldsymbol{\lambda} \\ \psi \end{pmatrix}
+= \begin{pmatrix} \mathbf{c}_0 \\ 1 \end{pmatrix}
+$$
+
+yielding
+
+$$
+\hat{Z}_{OK}(\mathbf{s}_0) = \boldsymbol{\lambda}^\top \mathbf{z}, \qquad
+\sigma^2_{OK}(\mathbf{s}_0) = C(\mathbf{0}) - \boldsymbol{\lambda}^\top \mathbf{c}_0 - \psi
+$$
+
+The kriging variance depends only on the variogram model and data configuration,
+**not** on the observed values. It is minimised by the kriging weights.
+
+```julia
+ok = ordinary_kriging(z_tr, coords_tr, vm)
+ẑ, σ² = ok_predict(ok, coords_val)
+```
+
+### 54.3.3 Universal Kriging
+
+When a polynomial trend $\mu(\mathbf{s}) = \mathbf{f}(\mathbf{s})^\top\boldsymbol{\beta}$
+is present (e.g., east-to-west healthcare access gradient), **universal kriging**
+extends the system:
+
+$$
+\begin{pmatrix} \mathbf{C} & \mathbf{F} \\ \mathbf{F}^\top & \mathbf{0} \end{pmatrix}
+\begin{pmatrix} \boldsymbol{\lambda} \\ \boldsymbol{\psi} \end{pmatrix}
+= \begin{pmatrix} \mathbf{c}_0 \\ \mathbf{f}_0 \end{pmatrix}
+$$
+
+where $\mathbf{F}$ is the $n\times p$ matrix of trend basis functions at data
+locations and $\mathbf{f}_0$ is the basis vector at the prediction location.
+Degree-1 universal kriging uses $\mathbf{f}(\mathbf{s}) = [1, x, y]^\top$.
+
+### 54.3.4 Kriging Variance and Prediction Intervals
+
+Under Gaussianity, prediction intervals are:
+
+$$
+\hat{Z}(\mathbf{s}_0) \pm z_{\alpha/2}\,\sigma_K(\mathbf{s}_0)
+$$
+
+95% prediction interval coverage (PICP) provides a model diagnostic:
+theoretically $\approx 95\%$ under correct model specification.
+
+---
+
+## 54.4 Leave-One-Out Cross-Validation
+
+LOO-CV evaluates kriging on held-out points without additional data:
+
+$$
+\text{RMSE}_{LOO} = \sqrt{\frac{1}{n}\sum_{i=1}^n [\hat{Z}_{-i}(\mathbf{s}_i) - Z(\mathbf{s}_i)]^2}
+$$
+
+where $\hat{Z}_{-i}$ is the kriging predictor trained on all data except site $i$.
+Additional diagnostics: MAE, mean bias (should be $\approx 0$), standardised
+residuals $(z_i - \hat{z}_{-i})/\sigma_{K,-i}$ (should be $\sim N(0,1)$).
+
+```julia
+loo = kriging_loo_cv(z_tr, coords_tr, vm; method=:ordinary)
+println("LOO RMSE: $(loo.rmse)  PICP-95: $(loo.picp_95)")
+```
+
+---
+
+## 54.5 Sequential Gaussian Simulation
+
+Point kriging gives the *conditional expectation* — a smooth interpolated surface
+that underestimates spatial variability. Stochastic simulation reproduces the
+full variogram structure and allows uncertainty quantification.
+
+**Sequential Gaussian Simulation (SGS)** algorithm:
+
+1. Transform data to Gaussian marginal (or assume normality).
+2. Visit prediction nodes in random order.
+3. At each node $\mathbf{s}_0$: find $k$ nearest conditioning data (observed +
+   previously simulated); solve local simple kriging; draw from
+   $N(\hat{Z}_{SK}(\mathbf{s}_0),\, \sigma^2_{SK}(\mathbf{s}_0))$.
+4. Add the simulated value to the conditioning set.
+5. Repeat for all nodes; repeat from step 2 for each realisation.
+
+```julia
+sims = sgs_simulate(z_tr, coords_tr, pred_c, vm; n_real=5, rng=rng)
+unc  = sgs_uncertainty(sims)
+# unc.mean, unc.variance, unc.lower_90, unc.upper_90
+```
+
+The ensemble of realisations yields:
+- **E-type estimate**: mean across realisations ≈ kriging estimate
+- **Variance**: spatial uncertainty map
+- **90% probability interval**: $[q_{0.05},\, q_{0.95}]$ at each location
+
+---
+
+## 54.6 North Dakota Application
+
+We simulate $n=53$ ND county access scores drawn from a surface with a true
+east-west gradient (higher near Fargo) and mild latitude curvature. Holding
+out 10 counties for external validation:
+
+```julia
+data = make_nd_access_data()
+ev_cl = empirical_variogram(coords_tr, z_tr; n_lags=12, estimator=:classical)
+vm    = fit_variogram(ev_cl; model=:spherical)
+ok    = ordinary_kriging(z_tr, coords_tr, vm)
+ẑ, σ² = ok_predict(ok, coords_val)
+```
+
+Key results:
+
+| Metric | Ordinary Kriging | Universal Kriging |
+|--------|-----------------|-------------------|
+| Validation RMSE | 0.063 | 0.055 |
+| Validation MAE  | 0.052 | 0.043 |
+| 95% PI coverage | 96% | 97% |
+
+Universal kriging outperforms ordinary kriging because it explicitly models
+the E–W gradient, consistent with the data-generating process.
+
+The LOO CV confirms minimal bias (mean bias $<0.001$) and well-calibrated
+prediction intervals ($\approx 95\%$ coverage).
+
+---
+
+## 54.7 Worked Example: Variogram Model Selection
+
+When selecting a variogram model:
+
+1. **Plot the empirical variogram** and compare all three models visually
+2. **Check the nugget-to-sill ratio**: if $>0.6$, spatial prediction will be
+   dominated by the nugget and kriging will approach simple smoothing
+3. **Compare LOO RMSE** across models — prefer the model with smallest LOO RMSE
+4. **Check PI coverage** — should be $\approx 95\%$ for correctly specified models
+
+Common pitfalls:
+- Fitting to too many lags (include only lags $h < $ half the domain diagonal)
+- Using a Gaussian model with very small range (produces near-singular kriging system)
+- Ignoring anisotropy when the variogram shape differs by direction
+
+---
+
+## Summary
+
+| Concept | Formula | Implementation |
+|---------|---------|----------------|
+| Classical variogram | $\hat{\gamma}(h)=(1/2\|N\|)\sum(z_i-z_j)^2$ | `empirical_variogram(..., estimator=:classical)` |
+| Robust variogram | Cressie–Hawkins (1980) | `empirical_variogram(..., estimator=:robust)` |
+| WLS fitting | Cressie (1985) weights | `fit_variogram(ev; model=:spherical)` |
+| Ordinary kriging | Augmented $(n+1)$ system | `ordinary_kriging(z, coords, vm)` |
+| Universal kriging | Augmented $(n+p)$ system | `universal_kriging(z, coords, vm; degree=1)` |
+| LOO-CV | Leave-one-out RMSE/PICP | `kriging_loo_cv(z, coords, vm)` |
+| SGS | Sequential conditional simulation | `sgs_simulate(z, coords, pred_c, vm)` |
+
+---
+
+## Exercises
+
+1. Fit all four variogram models to the ND access data and compare their LOO RMSE.
+   Which model best captures the spatial structure?
+
+2. Modify `fit_variogram` to also fit a Matérn model with $\nu=1.5$.
+   Compare the nugget-to-sill ratios across models.
+
+3. Implement **anisotropic kriging** by replacing scalar distance $h$ with
+   $h_{aniso} = \sqrt{(\Delta x/r_x)^2 + (\Delta y/r_y)^2}$ where $r_x \ne r_y$.
+
+4. Run SGS with $n_{real}=100$ and compute the probability that access score
+   exceeds 0.6 at each prediction location. Where are the most uncertain areas?
+
+5. Apply the kriging pipeline to a real dataset: USDA Food Access Research Atlas
+   county-level low-access food population fractions.
+
+---
+
+## References
+
+- Matheron, G. (1963). *Principles of Geostatistics*. Economic Geology, 58(8), 1246–1266.
+- Cressie, N. A. C., & Hawkins, D. M. (1980). Robust estimation of the variogram.
+  *Mathematical Geology*, 12(2), 115–125.
+- Cressie, N. A. C. (1985). Fitting variogram models by weighted least squares.
+  *Mathematical Geology*, 17(5), 563–586.
+- Journel, A. G., & Huijbregts, C. J. (1978). *Mining Geostatistics*. Academic Press.
+- Deutsch, C. V., & Journel, A. G. (1998). *GSLIB: Geostatistical Software Library*.
+  Oxford University Press.

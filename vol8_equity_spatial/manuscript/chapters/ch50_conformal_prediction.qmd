@@ -1,0 +1,207 @@
+---
+title: "Chapter 50: Conformal Prediction and Calibration"
+subtitle: "Distribution-Free Uncertainty Quantification for Healthcare"
+---
+
+# Chapter 50: Conformal Prediction and Calibration
+
+> "A prediction algorithm should know what it doesn't know."
+> — Vladimir Vovk, Algorithmic Learning in a Random World (2005)
+
+## 50.1 The Calibration Problem in Healthcare
+
+Healthcare AI systems must communicate uncertainty honestly.  A model that
+says "82% chance of readmission" should be correct 82% of the time — not
+60% or 95%.  Poorly calibrated confidence leads to:
+- **Overconfident** predictions: clinicians over-rely on model outputs
+- **Underconfident** predictions: necessary interventions are delayed
+
+More fundamentally, most ML methods provide only **point predictions**.
+A prediction interval [0.003, 0.011] for an access score is far more
+actionable than a point estimate of 0.007.
+
+**Conformal prediction** provides such intervals with *finite-sample
+coverage guarantees* — without assuming any particular data distribution.
+
+## 50.2 The Conformal Guarantee
+
+**Theorem** (Vovk 2005): Under exchangeability of $(X_1, Y_1), \ldots, (X_{n+1}, Y_{n+1})$:
+
+$$\Pr(Y_{n+1} \in C_\alpha(X_{n+1})) \geq 1 - \alpha$$
+
+This holds for **any** regression model $\hat{f}$, any distribution, any
+sample size.  It requires only the mild assumption of exchangeability
+(satisfied when data are i.i.d. or under certain time-series conditions).
+
+## 50.3 Split Conformal Prediction
+
+### 50.3.1 Algorithm
+
+1. Split data: training set $I_1$, calibration set $I_2$ (typically 15–30%)
+2. Train model $\hat{f}$ on $I_1$
+3. Compute **nonconformity scores**: $s_i = |y_i - \hat{f}(x_i)|$ for $i \in I_2$
+4. Compute quantile: $\hat{q} = \text{Quantile}\left(\{s_i\}, \frac{\lceil(|I_2|+1)(1-\alpha)\rceil}{|I_2|}\right)$
+5. Predict: $C_\alpha(x) = [\hat{f}(x) - \hat{q},\ \hat{f}(x) + \hat{q}]$
+
+```julia
+using ConformalHealth
+
+# Any predict function works
+predict_fn = X -> X * β_ols  # OLS, GP, neural network — doesn't matter
+
+# Step 1: Calibrate on held-out data
+cr = conformal_fit(predict_fn, X_calib, y_calib; α=0.10)
+
+# Step 2: Generate prediction intervals
+result = conformal_predict(cr, X_test)
+println("Calibration q̂: $(round(cr.q̂; digits=4))")
+
+# Step 3: Verify coverage (should be ≥ 0.90)
+cov = conformal_coverage(result, y_test)
+println("Empirical coverage: $(round(cov.coverage; digits=3))")
+println("Mean interval width: $(round(cov.mean_width; digits=4))")
+```
+
+**Key property**: Split conformal produces **constant-width** intervals.
+All predictions get the same ±q̂ margin, regardless of input.
+
+## 50.4 Conformalized Quantile Regression (CQR)
+
+CQR (Romano, Patterson & Candès 2019) produces **locally adaptive** intervals
+that are wider where the model is uncertain.
+
+### 50.4.1 Algorithm
+
+1. Fit quantile regressors $\hat{q}_{\alpha/2}(x)$ and $\hat{q}_{1-\alpha/2}(x)$
+2. Compute CQR scores: $s_i = \max(\hat{q}_{\alpha/2}(x_i) - y_i,\ y_i - \hat{q}_{1-\alpha/2}(x_i))$
+3. Conformal adjustment: $\hat{q} = \text{Quantile}(\{s_i\}, 1-\alpha)$
+4. Predict: $C(x) = [\hat{q}_{\alpha/2}(x) - \hat{q},\ \hat{q}_{1-\alpha/2}(x) + \hat{q}]$
+
+```julia
+m_cqr = cqr_fit(X_train, y_train, X_calib, y_calib; α=0.10)
+df_intervals = cqr_predict(m_cqr, X_test)
+
+println("CQR interval widths: $(round(minimum(df_intervals.width);digits=4)) " *
+        "to $(round(maximum(df_intervals.width);digits=4))")
+# CQR widths vary → locally adaptive!
+
+# Conditional coverage in rural vs urban counties
+mask_rural = test_groups .== "rural"
+mask_urban = .!mask_rural
+cov_rural = mean((y_test[mask_rural] .>= df_intervals.lower[mask_rural]) .&
+                  (y_test[mask_rural] .<= df_intervals.upper[mask_rural]))
+println("Coverage (rural): $(round(cov_rural; digits=3))")
+```
+
+## 50.5 Jackknife+
+
+For small calibration sets where splitting is wasteful, **jackknife+**
+uses leave-one-out residuals:
+
+```julia
+fit_fn = (Xtr, ytr) -> begin
+    X_aug = hcat(ones(size(Xtr,1)), Xtr)
+    β = (X_aug'X_aug + 1e-8I) \ X_aug'ytr
+    X_new -> vec(hcat(ones(size(X_new,1)), X_new) * β)
+end
+
+# Uses all training data; no separate calibration set needed
+jr = jackknife_plus(fit_fn, X_train, y_train, X_test;
+                     α=0.10, max_n_loo=50)
+
+println("Jackknife+ coverage: $(mean((y_test .>= jr.lower) .& (y_test .<= jr.upper)))")
+```
+
+**Guarantee**: $\Pr(Y \in C(X)) \geq 1 - 2\alpha$ (slightly weaker than split conformal).
+
+## 50.6 Adaptive Prediction Sets for Classification
+
+For the readmission classifier, conformal prediction produces **prediction
+sets** — subsets of classes guaranteed to contain the true class:
+
+```julia
+# Calibrate APS on held-out data
+# probs_calib: n_calib × K probability matrix (softmax outputs)
+aps = aps_fit(probs_calib, y_calib; α=0.10, score_type=:aps)
+
+# Prediction sets for new patients
+sets = aps_predict(aps, probs_test)
+df_sets = conformal_classify(probs_test, aps)
+
+# Interpretation: set_size > 1 → model is uncertain
+n_uncertain = sum(df_sets.uncertain)
+println("Uncertain predictions: $n_uncertain / $(nrow(df_sets))")
+println("Example set: $(df_sets.pred_set[1])")  # e.g., "1,2" means both class 1 and 2 plausible
+```
+
+**Clinical interpretation**: When the prediction set is {1, 2} (both readmission
+and no-readmission), flag for clinician review rather than automated action.
+
+## 50.7 Probability Calibration
+
+### 50.7.1 Temperature Scaling
+
+For neural network softmax outputs with overconfident logits:
+
+$$p_k^{\text{cal}} = \frac{\exp(z_k / T)}{\sum_j \exp(z_j / T)}$$
+
+$T > 1$: softer (more uncertain) probabilities; $T < 1$: harder.
+
+```julia
+# logits: n × K (before softmax); y: true class labels (1-indexed)
+T_opt, probs_calibrated = temperature_scaling(logits, y_calib; max_iter=500)
+println("Optimal temperature: $(round(T_opt; digits=3))")
+# T > 1: model was overconfident
+```
+
+### 50.7.2 Isotonic Regression Calibration
+
+For binary classifiers, isotonic calibration fits a monotone step function:
+
+```julia
+p_raw = model_probs  # raw probabilities from any classifier
+y_cal = binary_labels
+
+p_calibrated, cal_fn, _ = isotonic_calibrate(p_raw, y_cal)
+
+# Check improvement
+cr_before = calibration_error(p_raw, y_cal)
+cr_after  = calibration_error(p_calibrated, y_cal)
+println("ECE before: $(round(cr_before.ece;digits=4))")
+println("ECE after:  $(round(cr_after.ece;digits=4))")
+```
+
+### 50.7.3 Reliability Diagram
+
+A **reliability diagram** plots bin confidence (mean predicted probability)
+against bin accuracy (fraction of positives).  Well-calibrated: diagonal line.
+
+```julia
+rd = reliability_diagram(p_calibrated, y_cal; n_bins=10)
+# Plot rd.confidence vs rd.accuracy
+# Perfect calibration: all points on the diagonal
+```
+
+## 50.8 Comparison: Method Selection
+
+| Scenario | Recommended | Guarantee |
+|----------|------------|-----------|
+| Large calibration set (n>200), regression | Split Conformal | $\geq 1-\alpha$ |
+| Heteroskedastic noise | CQR | $\geq 1-\alpha$, adaptive |
+| Small calibration set | Jackknife+ | $\geq 1-2\alpha$ |
+| Classification, K classes | APS | $\geq 1-\alpha$ |
+| Neural net overconfidence | Temperature scaling | Empirical |
+| Binary classifier miscalibration | Isotonic regression | Empirical |
+
+## References
+
+- Vovk, V., Gammerman, A., & Shafer, G. (2005). *Algorithmic Learning in a
+  Random World*. Springer.
+- Romano, Y., Patterson, E., & Candès, E. (2019). Conformalized quantile
+  regression. *NeurIPS 32*.
+- Angelopoulos, A. N., Bates, S., Jordan, M., & Malik, J. (2021). Uncertainty
+  sets for image classifiers using conformal prediction. *ICLR 2021*.
+- Barber, R. F., Candès, E. J., Ramdas, A., & Tibshirani, R. J. (2021).
+  Predictive inference with the jackknife+. *Annals of Statistics*, 49(1).
+- Guo, C., Pleiss, G., Sun, Y., & Weinberger, K. Q. (2017). On calibration of
+  modern neural networks. *ICML 2017*.

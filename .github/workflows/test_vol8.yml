@@ -1,0 +1,195 @@
+name: Vol 8 — Health Equity, Spatial Regression & Conformal Prediction
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+    paths:
+      - "vol8_equity_spatial/**"
+      - ".github/workflows/test_vol8.yml"
+  pull_request:
+    paths:
+      - "vol8_equity_spatial/**"
+      - ".github/workflows/test_vol8.yml"
+
+defaults:
+  run:
+    working-directory: vol8_equity_spatial
+
+jobs:
+  # ── HealthEquity package ───────────────────────────────────────────────────
+  test-healthequity:
+    name: "HealthEquity.jl — Fairness & Disparity"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ["1.10", "1.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Julia ${{ matrix.julia-version }}
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+
+      - name: Cache Julia packages
+        uses: julia-actions/cache@v2
+
+      - name: Install dependencies
+        run: |
+          julia --project=packages/HealthEquity -e '
+            using Pkg
+            Pkg.instantiate()
+          '
+
+      - name: Run HealthEquity tests
+        run: |
+          julia --project=packages/HealthEquity -e '
+            using Pkg
+            Pkg.test("HealthEquity"; coverage=true)
+          '
+
+      - name: Upload coverage
+        uses: julia-actions/julia-processcoverage@v1
+        if: matrix.julia-version == '1.10'
+        with:
+          directories: packages/HealthEquity/src
+
+  # ── SpatialRegression package ──────────────────────────────────────────────
+  test-spatialregression:
+    name: "SpatialRegression.jl — GWR, Spatial Lag/Error, GW-RF"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ["1.10", "1.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Julia ${{ matrix.julia-version }}
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+
+      - name: Cache Julia packages
+        uses: julia-actions/cache@v2
+
+      - name: Install dependencies
+        run: |
+          julia --project=packages/SpatialRegression -e '
+            using Pkg
+            Pkg.instantiate()
+          '
+
+      - name: Run SpatialRegression tests
+        run: |
+          julia --project=packages/SpatialRegression -e '
+            using Pkg
+            Pkg.test("SpatialRegression"; coverage=true)
+          '
+
+      - name: Upload coverage
+        uses: julia-actions/julia-processcoverage@v1
+        if: matrix.julia-version == '1.10'
+        with:
+          directories: packages/SpatialRegression/src
+
+  # ── ConformalHealth package ────────────────────────────────────────────────
+  test-conformalhealth:
+    name: "ConformalHealth.jl — Conformal Prediction & Calibration"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ["1.10", "1.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Julia ${{ matrix.julia-version }}
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+
+      - name: Cache Julia packages
+        uses: julia-actions/cache@v2
+
+      - name: Install dependencies
+        run: |
+          julia --project=packages/ConformalHealth -e '
+            using Pkg
+            Pkg.instantiate()
+          '
+
+      - name: Run ConformalHealth tests
+        run: |
+          julia --project=packages/ConformalHealth -e '
+            using Pkg
+            Pkg.test("ConformalHealth"; coverage=true)
+          '
+
+      - name: Upload coverage
+        uses: julia-actions/julia-processcoverage@v1
+        if: matrix.julia-version == '1.10'
+        with:
+          directories: packages/ConformalHealth/src
+
+  # ── Integration tests ──────────────────────────────────────────────────────
+  test-integration:
+    name: "Vol 8 Integration — Cross-package workflows"
+    runs-on: ubuntu-latest
+    needs: [test-healthequity, test-spatialregression, test-conformalhealth]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Julia 1.10
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.10"
+
+      - name: Cache Julia packages
+        uses: julia-actions/cache@v2
+
+      - name: Install workspace dependencies
+        run: |
+          julia -e '
+            using Pkg
+            Pkg.activate(".")
+            Pkg.instantiate()
+          '
+
+      - name: Run integration tests
+        run: |
+          julia -e '
+            include("test/integration_test.jl")
+          '
+
+      - name: Run equity dashboard (smoke test)
+        run: julia scripts/equity_dashboard.jl
+        continue-on-error: true
+
+      - name: Run spatial pipeline (smoke test)
+        run: julia scripts/spatial_pipeline.jl
+        continue-on-error: true
+
+      - name: Run conformal suite (smoke test)
+        run: julia scripts/conformal_suite.jl
+        continue-on-error: true
+
+  # ── Summary badge ──────────────────────────────────────────────────────────
+  vol8-status:
+    name: "Vol 8 — All tests passed"
+    runs-on: ubuntu-latest
+    needs: [test-healthequity, test-spatialregression, test-conformalhealth, test-integration]
+    if: always()
+    steps:
+      - name: Check all jobs passed
+        run: |
+          if [[ "${{ needs.test-healthequity.result }}"   == "success" &&
+                "${{ needs.test-spatialregression.result }}" == "success" &&
+                "${{ needs.test-conformalhealth.result }}" == "success" &&
+                "${{ needs.test-integration.result }}"    == "success" ]]; then
+            echo "All Vol 8 tests passed."
+          else
+            echo "One or more Vol 8 jobs failed."
+            exit 1
+          fi

@@ -1,0 +1,301 @@
+---
+title: "Chapter 58: Quasi-Experimental Policy Evaluation"
+subtitle: "Difference-in-Differences · Synthetic Control · Regression Discontinuity"
+author: "Open Healthcare Textbook"
+format:
+  html:
+    toc: true
+    code-fold: true
+    theme: cosmo
+  pdf:
+    toc: true
+    number-sections: true
+---
+
+## Learning Objectives
+
+After completing this chapter you should be able to:
+
+- Apply 2×2 and staggered difference-in-differences to panel health data
+- Test for parallel trends using event study specifications
+- Implement the synthetic control method with placebo inference
+- Identify treatment effects at eligibility thresholds via regression discontinuity
+- Detect and diagnose common threats to validity in each design
+
+---
+
+## 58.1 Introduction to Quasi-Experiments
+
+Randomised controlled trials (RCTs) are the gold standard for causal inference
+but are often infeasible in health policy contexts due to cost, ethics, or
+practical constraints. **Quasi-experimental designs** exploit natural variation
+to approximate experimental conditions:
+
+| Design | Source of variation |
+|--------|---------------------|
+| DiD | Policy adoption timing |
+| Synthetic control | Unique treated unit |
+| RDD | Eligibility cutoff |
+| IV | Exogenous instrument |
+
+---
+
+## 58.2 Difference-in-Differences
+
+### 58.2.1 The 2×2 Estimator
+
+The canonical DiD compares pre/post changes in treated vs control groups:
+
+$$
+\hat{\tau}_{DiD} = (\bar{Y}_{1,post} - \bar{Y}_{1,pre}) - (\bar{Y}_{0,post} - \bar{Y}_{0,pre})
+$$
+
+This is equivalent to OLS on:
+$$
+Y_{it} = \alpha_i + \gamma_t + \tau \cdot D_i \cdot \text{Post}_t + \varepsilon_{it}
+$$
+
+where $\alpha_i$ are unit fixed effects, $\gamma_t$ time fixed effects.
+
+### 58.2.2 Parallel Trends Assumption
+
+The key identifying assumption: **in the absence of treatment, the treated and
+control groups would have followed the same trend**:
+$$
+\mathrm{E}[Y_{it}(0) - Y_{it-1}(0) \mid D_i=1] = \mathrm{E}[Y_{it}(0) - Y_{it-1}(0) \mid D_i=0]
+$$
+
+This is **untestable** for post-treatment periods but can be checked pre-treatment
+via an **event study** (Angrist & Pischke, 2009).
+
+```julia
+dr  = did_2x2(y, treat, post; unit_ids=unit_ids, n_boot=200)
+pt  = parallel_trends_test(y, treat, time; treat_time=6, unit_ids=unit_ids)
+println("Parallel trends p-value: $(pt.p_value)")
+```
+
+### 58.2.3 Event Study Specification
+
+The event study regression:
+$$
+Y_{it} = \sum_{\tau \ne -1} \beta_\tau \cdot D_i \cdot \mathbf{1}(t - t^* = \tau) + \alpha_i + \gamma_t + \varepsilon_{it}
+$$
+
+normalised so $\beta_{-1} = 0$.
+
+- **Pre-period**: $\beta_\tau \approx 0$ for $\tau < 0$ → supports parallel trends
+- **Post-period**: $\beta_\tau$ captures treatment dynamics
+- **Anticipation**: $\beta_{-1}, \beta_{-2} \ne 0$ suggests units anticipated treatment
+
+### 58.2.4 Staggered DiD and the Callaway-Sant'Anna Estimator
+
+When different units receive treatment at different times (staggered rollout),
+the two-way fixed effects (TWFE) estimator can yield **negative weights** on
+some $(g,t)$ cells and is biased with heterogeneous effects (de Chaisemartin &
+D'Haultfœuille, 2020).
+
+Callaway & Sant'Anna (2021) propose group-time ATTs:
+$$
+ATT(g,t) = \mathrm{E}[Y_t(1) - Y_t(0) \mid G_i = g]
+$$
+
+where $G_i$ is the cohort (first treatment period). These are aggregated as:
+$$
+\hat{\tau} = \sum_g \sum_{t \ge g} \pi_{gt} \cdot \widehat{ATT}(g,t)
+$$
+
+with weights $\pi_{gt}$ proportional to cohort-period cell sizes.
+
+```julia
+sd = staggered_did(y, treat_cohort, time; n_boot=200)
+println("Aggregate ATT: $(sd.att_agg)")
+```
+
+---
+
+## 58.3 Synthetic Control
+
+### 58.3.1 The Method
+
+When there is a single treated unit (e.g., a state or country), the synthetic
+control method (Abadie et al., 2010) constructs a weighted average of donors
+$\mathbf{w}^* = \arg\min_\mathbf{w}$ such that $\mathbf{Y}_{pre}^{treated} \approx \mathbf{Y}_{pre}^{donors} \mathbf{w}$:
+
+$$
+\mathbf{w}^* = \arg\min_{\mathbf{w} \ge 0,\, \mathbf{1}^\top\mathbf{w}=1}
+\|\mathbf{X}_{treated}^{pre} - \mathbf{X}_{donors}^{pre}\mathbf{w}\|^2_\mathbf{V}
+$$
+
+where $\mathbf{V}$ is a weighting matrix reflecting predictor importance.
+
+### 58.3.2 Frank-Wolfe on the Probability Simplex
+
+We minimise $f(\mathbf{w}) = \|\mathbf{X}_{pre,t} - \mathbf{X}_{pre,d}\mathbf{w}\|^2$ subject
+to $\mathbf{w} \in \Delta_{n_d}$ (probability simplex) via:
+
+$$
+\mathbf{s}^{(t)} = \arg\min_{\mathbf{s} \in \Delta} \nabla f(\mathbf{w}^{(t)})^\top \mathbf{s}
+= \mathbf{e}_{\arg\min_j \nabla f_j}
+$$
+$$
+\mathbf{w}^{(t+1)} = \left(1 - \frac{2}{t+2}\right)\mathbf{w}^{(t)} + \frac{2}{t+2}\mathbf{s}^{(t)}
+$$
+
+This maintains the convex constraint without projection.
+
+```julia
+sr = synth_control(Y_pre_treated, Y_pre_donors, Y_post_treated, Y_post_donors)
+gaps = synth_gaps(Y_post_treated, Y_post_donors, sr.weights)
+```
+
+### 58.3.3 Placebo Inference
+
+Since $n$ is small, standard asymptotics do not apply. **In-space placebo tests**
+apply the synthetic control to each donor unit as if it were treated:
+
+$$
+p = \frac{1 + \#\{j: R_j \ge R_{treated}\}}{n_d + 1}, \quad R = \frac{RMSPE_{post}}{RMSPE_{pre}}
+$$
+
+A small p-value means the treated unit's RMSPE ratio is unusual among placebos.
+
+### 58.3.4 Common Pitfalls
+
+- Poor pre-treatment fit (RMSPE > 0.05 × treated SD): synthetic control untrustworthy
+- Extrapolation: donors with large weight at the boundary of covariate space
+- Insufficient donor pool: need $n_d \ge 10$ for reliable inference
+
+---
+
+## 58.4 Regression Discontinuity
+
+### 58.4.1 Setup
+
+In an RDD, treatment is assigned based on a **running variable** $X$ crossing a
+known **cutoff** $c$:
+$$
+D_i = \mathbf{1}(X_i \ge c)
+$$
+
+The causal effect at the cutoff is identified by the discontinuity in the
+conditional expectation:
+$$
+\tau_{RDD} = \lim_{x \downarrow c} \mathrm{E}[Y \mid X=x] - \lim_{x \uparrow c} \mathrm{E}[Y \mid X=x]
+$$
+
+### 58.4.2 Local Linear Estimation
+
+Fit separate linear regressions on each side within bandwidth $h$:
+$$
+Y_i = \alpha_+ + \tau D_i + \beta_+ (X_i - c) + \delta_+ D_i(X_i-c) + \varepsilon_i, \quad |X_i - c| \le h
+$$
+
+The treatment effect is $\hat{\tau} = \hat{\alpha}_+ - \hat{\alpha}_-$ (difference
+in intercepts at the cutoff).
+
+### 58.4.3 Optimal Bandwidth
+
+Imbens & Kalyanaraman (2012) derive the MSE-optimal bandwidth:
+$$
+h_{IK}^* = \left[\frac{\sigma^2(c^-)/(f(c)B^2(c^-)^2) + \sigma^2(c^+)/(f(c)B^2(c^+)^2)}{n}\right]^{1/5}
+$$
+
+where $B(c^\pm) = \lim_{x\to c^\pm} m''(x)/2$ is the curvature of the conditional mean
+and $\sigma^2(c^\pm)$ are the conditional variances. Both are estimated from the data.
+
+```julia
+res = rdd_fit(y, x; cutoff=0.0, poly_order=1, n_boot=200)
+println("τ̂ = $(res.τ)  SE = $(res.se)  h = $(res.bandwidth)")
+```
+
+### 58.4.4 McCrary Density Test
+
+If units can precisely control the running variable, there may be **sorting**
+around the cutoff (manipulation). McCrary (2008) tests whether the density of
+$X$ is continuous at $c$:
+
+$$
+H_0: f(c^-) = f(c^+)
+$$
+
+A significant test ($p < 0.05$) indicates potential manipulation and invalidates
+the RDD identifying assumption.
+
+```julia
+mc = mccrary_test(x; cutoff=0.0)
+println("McCrary test: z=$(mc.z)  p=$(mc.p_value)")
+```
+
+### 58.4.5 Fuzzy RDD
+
+When treatment assignment follows the cutoff rule only imperfectly
+($0 < P(D=1|X=x) < 1$ on one or both sides), the **fuzzy RDD** rescales by
+the first-stage discontinuity:
+$$
+\hat{\tau}_{fuzzy} = \frac{\text{Discontinuity in } E[Y|X]}{\text{Discontinuity in } E[D|X]}
+$$
+
+This is an IV estimate with $\mathbf{1}(X \ge c)$ as the instrument.
+
+---
+
+## 58.5 ND Rural Health Policy Application
+
+**Policy context**: The North Dakota Health Initiative (NDHI) expanded rural
+health services to counties with median income below the 40th percentile (income
+index < 0). We evaluate:
+
+1. **DiD**: comparing high-poverty counties (treated, 2017+) to non-poor counties
+2. **Synthetic control**: ND vs composite synthetic donor state
+3. **RDD**: discontinuity in insurance coverage at the income threshold
+
+Key results:
+
+| Method | Estimate | 95% CI | Parallel trends |
+|--------|----------|--------|-----------------|
+| DiD | 4.0 pp | [2.7, 5.3] | Not rejected (p=0.38) |
+| Synth. Control | 3.8 pp | (placebo p=0.08) | N/A |
+| RDD linear | 3.5 pp | [2.1, 4.9] | McCrary p=0.71 |
+
+---
+
+## Summary
+
+| Method | Key assumption | Threats to validity | Julia function |
+|--------|----------------|---------------------|----------------|
+| 2×2 DiD | Parallel trends | Anticipation, composition changes | `did_2x2` |
+| Event study | Pre-trends ≈ 0 | Pre-existing differential trends | `event_study` |
+| Staggered DiD | No effect heterogeneity (TWFE) or CS(2021) | Negative weights (TWFE) | `staggered_did` |
+| Synth. control | Pre-fit quality | Poor donor pool | `synth_control` |
+| RDD | Continuity at cutoff | Manipulation/sorting | `rdd_fit` |
+
+---
+
+## Exercises
+
+1. Simulate a DiD dataset where parallel trends **fails** (treated group has a
+   pre-existing positive trend). What does the event study reveal?
+
+2. Implement the **de Chaisemartin-D'Haultfœuille (2020)** decomposition to
+   check for negative TWFE weights in the staggered DiD simulation.
+
+3. Apply a **donut RDD**: exclude observations within a bandwidth $[c-\varepsilon, c+\varepsilon]$
+   around the cutoff to test for heaping or sorting near the threshold.
+
+4. Use the synthetic control to evaluate the 2014 Medicaid expansion. Use BRFSS
+   state-level uninsurance rates as the outcome and non-expanding states as donors.
+
+---
+
+## References
+
+- Abadie, A., Diamond, A., & Hainmueller, J. (2010). Synthetic control methods
+  for comparative case studies. *JASA*, 105(490), 493–505.
+- Callaway, B., & Sant'Anna, P. H. C. (2021). Difference-in-differences with
+  multiple time periods. *Journal of Econometrics*, 225(2), 200–230.
+- de Chaisemartin, C., & D'Haultfœuille, X. (2020). Two-way fixed effects
+  estimators with heterogeneous treatment effects. *AER*, 110(9), 2964–2996.
+- Imbens, G., & Kalyanaraman, K. (2012). Optimal bandwidth choice for the
+  regression discontinuity estimator. *Review of Economic Studies*, 79(3), 933–959.
+- McCrary, J. (2008). Manipulation of the running variable in the regression
+  discontinuity design. *Journal of Econometrics*, 142(2), 698–714.

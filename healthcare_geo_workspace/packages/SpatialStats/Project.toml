@@ -1,0 +1,22 @@
+name = "SpatialStats"
+uuid = "c3d4e5f6-a7b8-9012-cdef-345678901234"
+authors = ["SpatialStats Contributors"]
+version = "0.1.0"
+
+[deps]
+DataFrames = "a93c6f00-e57d-5684-b466-afe8fa294f38"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+GeoDataFrames = "62cb38b5-d8d2-4862-a48e-6a340996859f"
+GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
+GeoMakie = "db073c08-6b98-4ee5-b22a-4b16714a7f43"
+CairoMakie = "13f3f980-e62b-5c42-98c6-ff1f3baf88f0"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+NearestNeighbors = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
+Optim = "429524aa-4258-5aef-a3af-852621145aeb"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+Turing = "fce5fe82-541a-59a6-adf8-730c64b5f9a0"
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+
+[compat]
+julia = "1.9"

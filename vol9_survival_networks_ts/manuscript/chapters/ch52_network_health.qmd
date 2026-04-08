@@ -1,0 +1,233 @@
+---
+title: "Chapter 52: Healthcare Networks and Epidemic Modelling"
+author: "Open Healthcare Textbook"
+format:
+  html:
+    code-fold: false
+    toc: true
+  pdf:
+    toc: true
+julia: true
+---
+
+# Chapter 52: Healthcare Networks and Epidemic Modelling
+
+## Learning Objectives
+
+- Represent healthcare systems as weighted directed graphs
+- Compute centrality measures: degree, betweenness, PageRank
+- Model epidemic spread using SIR, SEIR, and SEIRD ODEs
+- Estimate the basic reproduction number R₀
+- Analyse patient flows and catchment areas
+
+## 52.1 Graph Theory for Healthcare Systems
+
+A healthcare network is a directed weighted graph $G = (V, E, w)$:
+
+- $V$ = facilities (hospitals, clinics, CAHs)
+- $E \subseteq V \times V$ = patient transfer edges
+- $w: E \to \mathbb{R}_{>0}$ = average monthly transfers
+
+The **adjacency matrix** $A_{ij} = w(i,j)$ encodes transfer volumes.
+
+```julia
+include("packages/NetworkHealth/src/NetworkHealth.jl")
+using .NetworkHealth
+
+# Minimal 4-facility network
+W = [0.0 20.0  5.0  0.0;
+     0.0  0.0 30.0  0.0;
+     0.0  0.0  0.0 10.0;
+     0.0  0.0  0.0  0.0]
+
+g = build_graph(W; labels=["Clinic-A","CAH-B","Regional-C","Specialist-D"])
+println("Nodes: ", g.n)
+println("Out-degree: ", [length(g.adj[i]) for i in 1:g.n])
+```
+
+## 52.2 Centrality Measures
+
+### 52.2.1 Degree and Strength Centrality
+
+Normalised degree centrality:
+
+$$C_D(v) = \frac{\text{deg}(v)}{n-1}$$
+
+Strength centrality (weighted degree):
+
+$$C_S(v) = \sum_{u:(u,v)\in E} w(u,v)$$
+
+High in-strength → regional hub receiving many referrals.
+
+### 52.2.2 Betweenness Centrality
+
+$$C_B(v) = \frac{1}{(n-1)(n-2)} \sum_{s \neq v \neq t} \frac{\sigma_{st}(v)}{\sigma_{st}}$$
+
+where $\sigma_{st}$ = number of shortest paths from $s$ to $t$, and
+$\sigma_{st}(v)$ = those passing through $v$.
+
+High betweenness → bottleneck facility; removal disrupts patient flows.
+
+### 52.2.3 PageRank
+
+The PageRank vector $\mathbf{r}$ satisfies:
+
+$$r_j = \frac{1-d}{n} + d \sum_{i:(i,j)\in E} \frac{w(i,j) \cdot r_i}{\sum_k w(i,k)}$$
+
+Solved iteratively (Brin & Page 1998) with damping factor $d = 0.85$.
+Interpretation: probability of arriving at facility $j$ by following
+weighted referral paths with random restarts.
+
+```julia
+pr = pagerank(g; d=0.85)
+bc = betweenness_centrality(g)
+dc = degree_centrality(g; mode=:in)
+
+println("PageRank:    ", round.(pr, digits=3))
+println("Betweenness: ", round.(bc, digits=3))
+println("In-degree:   ", round.(dc, digits=3))
+```
+
+## 52.3 Patient Flow and Catchment Analysis
+
+### 52.3.1 Self-Sufficiency Ratio
+
+$$\text{SSR}_i = \frac{F_{ii}}{\sum_j F_{ij}}$$
+
+Values below 0.5 indicate heavy outward referral (capacity constraints).
+
+### 52.3.2 Enhanced Two-Step Floating Catchment Area (E2SFCA)
+
+**Step 1** — Supply-to-demand ratio for each facility $j$:
+
+$$R_j = \frac{\text{capacity}_j}{\sum_{i \in \mathcal{Z}} \frac{\text{pop}_i}{d_{ij}^\beta}}$$
+
+**Step 2** — Accessibility score for each population zone $i$:
+
+$$A_i = \sum_{j \in \mathcal{F}} \frac{R_j}{d_{ij}^\beta}$$
+
+High $A_i$ → good access; $\beta = 2$ is the standard distance-decay exponent.
+
+```julia
+pop      = [2000.0, 5000.0, 1200.0]
+capacity = [80.0, 200.0]
+dist     = [3.0 15.0; 8.0  5.0; 2.0 12.0]
+
+ca = catchment_area(pop, capacity, dist; β=2.0)
+println("Zone assignments: ", ca.assignment)
+println("Utilisation rates: ", round.(100 .* ca.utilisation_rate, digits=1), "%")
+```
+
+## 52.4 Compartmental Epidemic Models
+
+### 52.4.1 SIR Model (Kermack & McKendrick 1927)
+
+$$\frac{dS}{dt} = -\frac{\beta S I}{N}, \quad
+  \frac{dI}{dt} = \frac{\beta S I}{N} - \gamma I, \quad
+  \frac{dR}{dt} = \gamma I$$
+
+Conservation: $S(t) + I(t) + R(t) = N$.
+
+Key threshold — **basic reproduction number**:
+
+$$R_0 = \frac{\beta}{\gamma}$$
+
+- $R_0 < 1$: epidemic cannot sustain; $I(t) \to 0$
+- $R_0 > 1$: epidemic grows until herd immunity
+- Herd immunity threshold: $p_c = 1 - 1/R_0$
+
+### 52.4.2 SEIR Model (with latent period)
+
+$$\frac{dE}{dt} = \frac{\beta S I}{N} - \sigma E, \quad
+  \frac{dI}{dt} = \sigma E - \gamma I$$
+
+- $1/\sigma$ = mean incubation (latent) period
+- Slows initial growth; peak shifted later vs SIR
+
+### 52.4.3 SEIRD Model (with mortality)
+
+$$\frac{dI}{dt} = \sigma E - (\gamma + \mu)I, \quad
+  \frac{dD}{dt} = \mu I$$
+
+- IFR $\approx \mu/(\gamma + \mu)$
+- $R_0 \approx \beta/\gamma$ (mortality's effect on transmission negligible for low IFR)
+
+### 52.4.4 Numerical Integration — RK4
+
+$$\mathbf{u}_{t+1} = \mathbf{u}_t + \frac{h}{6}(\mathbf{k}_1 + 2\mathbf{k}_2 + 2\mathbf{k}_3 + \mathbf{k}_4)$$
+
+$$\mathbf{k}_1 = f(\mathbf{u}_t),\quad
+  \mathbf{k}_2 = f(\mathbf{u}_t + \tfrac{h}{2}\mathbf{k}_1), \quad \ldots$$
+
+4th-order accuracy with $O(h^4)$ local error; stable for typical epidemic ODEs.
+
+```julia
+# SIR — influenza scenario
+sir = sir_model(770000, 50; β=0.25, γ=0.1, tspan=(0.0, 180.0))
+println("R₀ = ", round(sir.R0, digits=2))
+println("Peak prevalence: ", round(100*sir.peak_I, digits=2), "% at day ", round(sir.peak_time))
+println("Final attack rate: ", round(100*sir.final_size, digits=1), "%")
+
+# SEIRD — COVID-19 with interventions
+base = seird_model(770000; β=0.4, σ=0.2, γ=0.07, μ=0.01)
+npi  = seird_model(770000; β=0.2, σ=0.2, γ=0.07, μ=0.01)
+println("\nBaseline deaths:     ", round(100*base.D[end], digits=2), "%")
+println("NPI deaths:          ", round(100*npi.D[end], digits=2), "%")
+println("Herd immunity (NPI): ", round(100*npi.herd_threshold, digits=1), "%")
+```
+
+## 52.5 R₀ Estimation
+
+From early exponential growth phase (Wallinga & Lipsitch 2007):
+
+$$R_0 \approx 1 + \frac{r}{\gamma}$$
+
+where $r$ is the estimated per-day growth rate obtained from OLS on
+$\log \text{incidence}$ during the initial exponential phase.
+
+```julia
+rng = MersenneTwister(1)
+inc = Float64.([round(Int, 5 * 1.3^t + rand(rng)) for t in 0:14])
+res = estimate_r0(inc; method=:exponential_growth, γ=0.1, n_points=10)
+println("Estimated R₀: ", round(res.R0, digits=2))
+```
+
+## 52.6 Stochastic Network Epidemic
+
+The deterministic ODE ignores heterogeneous contact structure.
+In a network SIR:
+
+- Each infectious node $i$ attempts to infect each susceptible neighbour $j$
+  with probability $\beta \cdot w(i,j) / \sum_k w(i,k)$ per time step
+- Recovery with probability $\gamma$ per step
+
+Network structure (degree distribution, clustering) can significantly
+alter $R_0^{\text{net}} = R_0 \cdot \langle k^2 \rangle / \langle k \rangle$
+(Heterogeneous mean-field approximation, Pastor-Satorras & Vespignani 2001).
+
+## 52.7 Network Vulnerability
+
+Targeted attacks on high-degree/betweenness nodes can fragment the
+patient referral network. The **largest connected component** after
+sequential removal quantifies resilience:
+
+| Step | Removed | Largest CC |
+|------|---------|------------|
+| 0    | —       | n          |
+| 1    | Top hub | n - Δ₁    |
+| …    | …       | …          |
+
+Rural healthcare networks with few large hubs are particularly vulnerable.
+
+## 52.8 Exercises
+
+1. **PageRank vs betweenness**: Which metric better identifies a healthcare
+   system's critical transfer hub? Explain with reference to the ND network.
+2. **Herd immunity**: For an influenza strain with $R_0 = 2.5$ and a vaccine
+   efficacy of 60%, what vaccination coverage is required?
+3. **Intervention timing**: Re-simulate the SEIRD model with NPI starting at
+   day 20, 30, and 40. How does timing affect peak hospitalisation and deaths?
+4. **Network SIR**: Compare the stochastic network SIR on the ring graph
+   vs. a fully connected graph with the same $\beta/\gamma$. Explain the difference.
+5. **E2SFCA**: A new clinic is built at distance 5 km from each of the three
+   zones with capacity 20. Recompute accessibility scores.

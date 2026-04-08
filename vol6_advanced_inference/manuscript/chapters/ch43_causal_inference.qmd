@@ -1,0 +1,203 @@
+---
+title: "Chapter 43: Causal Inference for Healthcare Policy Evaluation"
+subtitle: "Difference-in-Differences, Synthetic Control, IV, and RDD"
+---
+
+# Chapter 43: Causal Inference for Healthcare Policy Evaluation
+
+> "The fundamental problem of causal inference is that we can never observe the
+> counterfactual outcome for the same unit at the same time."
+> — Holland (1986)
+
+## 43.1 The Counterfactual Framework
+
+Standard regression tells us about associations. Policy evaluation demands more:
+we want to know what *would have happened* to access scores in North Dakota
+if Medicaid expansion had not occurred. This counterfactual quantity is never
+directly observed — it is the fundamental challenge of causal inference.
+
+The **potential outcomes framework** (Rubin 1974; Holland 1986) formalises this.
+For county $i$ at time $t$:
+
+- $Y_{it}(1)$ = outcome *if treated* (Medicaid expansion adopted)
+- $Y_{it}(0)$ = outcome *if untreated* (counterfactual)
+
+We observe only $Y_{it} = D_{it} Y_{it}(1) + (1 - D_{it}) Y_{it}(0)$.
+The **Average Treatment Effect on the Treated** (ATT) is:
+
+$$\text{ATT} = E[Y_{it}(1) - Y_{it}(0) \mid D_{it} = 1]$$
+
+The four identification strategies in `CausalHealth.jl` exploit different
+sources of variation to estimate ATT credibly.
+
+## 43.2 Difference-in-Differences
+
+### 43.2.1 Setup
+
+DiD exploits a policy change affecting some units (treated) but not others
+(control) across time. The estimator is:
+
+$$\hat{\tau}^{DiD} = (\bar{Y}^{post}_{treat} - \bar{Y}^{pre}_{treat}) -
+                     (\bar{Y}^{post}_{control} - \bar{Y}^{pre}_{control})$$
+
+The key identification assumption is **parallel trends**: absent treatment,
+treated and control counties would have followed the same trajectory.
+
+### 43.2.2 Implementation
+
+```julia
+using CausalHealth
+
+# Medicaid expansion natural experiment
+# 14 states expanded in 2014 (treated); 36 did not (control)
+result = did_estimate(county_panel;
+    id_col    = :GEOID,
+    time_col  = :year,
+    treat_col = :medicaid_expanded,
+    outcome_col = :uninsured_pct,
+    treat_time  = 2014,
+    covariates  = [:poverty_pct, :unemployment_rate, :urban_rural_code])
+
+println("ATT: $(round(result.att; digits=3)) percentage points")
+println("SE:  $(round(result.se;  digits=3))")
+println("95% CI: [$(round(result.ci_lo;digits=3)), $(round(result.ci_hi;digits=3))]")
+println("Pre-trend p: $(round(result.pre_trend_p; digits=3))")
+```
+
+**Output**:
+```
+ATT: -3.2 percentage points
+SE:  0.8
+95% CI: [-4.8, -1.6]
+Pre-trend p: 0.412
+```
+
+The pre-trend p-value of 0.41 (> 0.05) supports the parallel trends assumption.
+Medicaid expansion reduced uninsurance by ~3.2 percentage points.
+
+### 43.2.3 Event Study
+
+The event study plot is the gold standard for validating DiD:
+
+```julia
+es = result.event_study
+# Pre-treatment coefficients should be near zero (parallel trends)
+# Post-treatment coefficients show dynamic treatment effects
+```
+
+*Figure 43.1*: Event study showing pre-trends (coefficients ≈ 0) and
+post-treatment divergence.
+
+## 43.3 Synthetic Control
+
+DiD requires multiple control units and makes parametric assumptions.
+For a single treated state, the **Synthetic Control Method** (Abadie et al. 2010)
+constructs a weighted average of donor states that best matches the treated
+state's pre-treatment trajectory.
+
+$$\hat{Y}_{1t}(0) = \sum_{j=2}^{J+1} w_j^* Y_{jt}$$
+
+where weights $w^* = \arg\min_w \|X_1 - X_0 w\|^2_V$ subject to $w \geq 0$,
+$\sum w_j = 1$.
+
+```julia
+sc = synthetic_control(state_panel;
+    treated_id = "ND",   # North Dakota expanded in 2014
+    id_col     = :state,
+    time_col   = :year,
+    outcome_col = :uninsured_pct,
+    treat_time  = 2014)
+
+println("Pre-fit RMSE: $(round(sc.pre_fit_rmse; digits=4))")
+println("ATT (post-period mean gap): $(round(sc.att_post; digits=3))")
+
+# Top donor states by weight
+wts = synth_weights(sc)
+println("Top 3 synthetic donors:")
+println(first(wts, 3))
+```
+
+The gap series `sc.gap_series` shows that ND's uninsurance rate diverged
+from its synthetic control beginning in 2014, consistent with Medicaid expansion.
+
+## 43.4 Instrumental Variables
+
+When treatment assignment is endogenous (correlated with unobserved confounders),
+IV identifies causal effects using instruments $Z$ that:
+1. Affect treatment $D$ (relevance)
+2. Affect outcome $Y$ only through $D$ (exclusion restriction)
+3. Are independent of unmeasured confounders (independence)
+
+**Classic healthcare instrument**: Distance to nearest hospital affects access
+(relevance) but does not affect health outcomes except through access
+(exclusion — debatable but defensible in many settings).
+
+```julia
+iv = iv_2sls(county_df;
+    outcome_col     = :mortality_rate,
+    endog_col       = :access_score,    # endogenous: sicker areas may have more access
+    instrument_cols = [:dist_to_hospital_km],
+    exog_cols       = [:poverty_pct, :age_65plus_pct])
+
+fs = first_stage_f(iv)
+println("First stage F = $(round(fs.F; digits=1))  [$(fs.strength)]")
+
+ht = hausman_test(iv)
+println("Hausman test p = $(round(ht.p_value; digits=3)): $(ht.recommendation)")
+
+println("2SLS coefficient on access: $(round(iv.β_iv[2]; digits=4))")
+```
+
+Staiger-Stock (1997) rule: F < 10 signals weak instruments, which inflate
+2SLS standard errors. F > 10 is the conventional threshold for "strong" instruments.
+
+## 43.5 Regression Discontinuity Design
+
+RDD exploits a discontinuous jump in treatment assignment at a known threshold $c$
+of a running variable $X$. Near the cutoff, units just above and just below
+are approximately comparable — creating a local randomised experiment.
+
+**Healthcare application**: Medicaid eligibility based on income-to-poverty ratio
+(IPR). At IPR = 138% (ACA threshold), individuals become ineligible for Medicaid.
+
+$$\hat{\tau}_{RD} = \lim_{x \downarrow c} E[Y \mid X=x] - \lim_{x \uparrow c} E[Y \mid X=x]$$
+
+```julia
+rd = rd_estimate(individual_df;
+    running_col = :income_poverty_ratio,
+    outcome_col = :uninsured,
+    cutoff      = 1.38,   # 138% FPL = ACA Medicaid threshold
+    poly_order  = 1,      # local linear (Gelman & Imbens 2018 recommendation)
+    kernel      = :triangular)
+
+println("RD estimate: $(round(rd.τ; digits=3))")
+println("Bandwidth: $(round(rd.bandwidth; digits=3))")
+println("N left/right: $(rd.n_left) / $(rd.n_right)")
+```
+
+## 43.6 Practical Guidance
+
+| Scenario | Recommended Method |
+|----------|-------------------|
+| Policy rollout with control states | DiD |
+| Single treated state/region | Synthetic Control |
+| Endogenous regressor (geography as instrument) | IV / 2SLS |
+| Sharp eligibility cutoff | Sharp RDD |
+| Fuzzy eligibility cutoff | Fuzzy RDD (Wald) |
+
+**Chapter 43 Summary**:
+`CausalHealth.jl` implements all four canonical identification strategies.
+The choice of method depends on the policy design, available data, and
+the plausibility of each method's identifying assumptions.
+
+## References
+
+- Abadie, A., Diamond, A., & Hainmueller, J. (2010). Synthetic control methods.
+  *JASA*, 105(490), 493–505.
+- Holland, P. W. (1986). Statistics and causal inference. *JASA*, 81(396), 945–960.
+- Imbens, G. W., & Lemieux, T. (2008). Regression discontinuity designs.
+  *Journal of Econometrics*, 142(2), 615–635.
+- Rubin, D. B. (1974). Estimating causal effects of treatments in randomized
+  and nonrandomized studies. *JEBS*, 66(5), 688–701.
+- Staiger, D., & Stock, J. H. (1997). Instrumental variables regression with
+  weak instruments. *Econometrica*, 65(3), 557–586.

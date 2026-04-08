@@ -1,0 +1,21 @@
+name = "MapClassify"
+uuid = "e5f6a7b8-c9d0-1234-ef01-567890123456"
+authors = ["Healthcare GeoAnalysis Contributors"]
+version = "0.1.0"
+
+[deps]
+DataFrames = "a93c6f00-e57d-5684-b466-afe8fa294f38"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+StatsBase = "2913bbd2-ae8a-5f71-8cce-781a0e4197df"
+
+[compat]
+julia = "1.10"
+DataFrames = "1"
+StatsBase = "0.34"
+
+[extras]
+Test = "8dfed614-e22c-358e-b159-9f75977ba353"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+
+[targets]
+test = ["Test", "Random"]

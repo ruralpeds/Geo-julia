@@ -1,0 +1,250 @@
+---
+title: "Chapter 53: Time-Series Forecasting and Outbreak Detection"
+author: "Open Healthcare Textbook"
+format:
+  html:
+    code-fold: false
+    toc: true
+  pdf:
+    toc: true
+julia: true
+---
+
+# Chapter 53: Time-Series Forecasting and Outbreak Detection
+
+## Learning Objectives
+
+- Characterise health time series using ACF and PACF
+- Fit ARIMA models via Yule-Walker and maximum likelihood
+- Implement the Kalman filter for dynamic linear models
+- Apply CUSUM, Farrington, and Poisson EWMA for outbreak surveillance
+- Evaluate forecasting models using rolling cross-validation
+
+## 53.1 Characterising Health Time Series
+
+A health time series $\{y_t\}_{t=1}^n$ may exhibit:
+
+- **Trend**: secular increase/decrease in admission rates
+- **Seasonality**: winter influenza peaks, summer injury patterns
+- **Autocorrelation**: today's admissions predict tomorrow's
+- **Overdispersion**: count data with variance > mean (Poisson assumption violated)
+
+### 53.1.1 Autocorrelation Function
+
+$$\hat{\rho}(k) = \frac{\hat{\gamma}(k)}{\hat{\gamma}(0)}, \quad
+  \hat{\gamma}(k) = \frac{1}{n}\sum_{t=1}^{n-k}(y_t - \bar{y})(y_{t+k} - \bar{y})$$
+
+### 53.1.2 Partial Autocorrelation (PACF)
+
+The PACF $\phi_{kk}$ is the correlation of $y_t$ with $y_{t-k}$ after
+removing linear dependence on $y_{t-1}, \ldots, y_{t-k+1}$, computed via
+the Yule-Walker / Durbin-Levinson recursion.
+
+| Pattern | Indicates |
+|---------|-----------|
+| ACF slow decay, PACF cuts at lag $p$ | AR($p$) |
+| ACF cuts at lag $q$, PACF slow decay | MA($q$) |
+| Both slow decay | ARMA($p$,$q$) |
+| ACF non-decay after differencing | Non-stationarity → difference |
+
+```julia
+include("packages/TimeSeriesHealth/src/TimeSeriesHealth.jl")
+using .TimeSeriesHealth
+
+rng = MersenneTwister(5)
+y   = cumsum(0.1 .+ 0.3*randn(rng, 100))  # random walk with drift
+
+ρ   = acf(y, 8)
+pa  = pacf(y, 5)
+println("ACF[1..5]: ", round.(ρ[2:6], digits=3))
+println("PACF[1..5]: ", round.(pa[1:5], digits=3))
+```
+
+## 53.2 ARIMA Models
+
+The ARIMA($p,d,q$) model: after $d$-fold differencing $\Delta^d y_t$:
+
+$$\phi(B)\Delta^d y_t = \theta(B)\varepsilon_t$$
+
+where $\phi(B) = 1 - \phi_1 B - \cdots - \phi_p B^p$ (AR polynomial) and
+$\theta(B) = 1 + \theta_1 B + \cdots + \theta_q B^q$ (MA polynomial), $B$ is
+the backshift operator, $\varepsilon_t \sim \text{WN}(0, \sigma^2)$.
+
+### 53.2.1 Yule-Walker Estimation for AR($p$)
+
+$$\boldsymbol{\Gamma}_p \boldsymbol{\phi} = \boldsymbol{\gamma}_p$$
+
+where $\Gamma_p[i,j] = \hat{\gamma}(|i-j|)$ and $\boldsymbol{\gamma}_p = (\hat{\gamma}(1),\ldots,\hat{\gamma}(p))'$.
+
+### 53.2.2 Conditional Log-Likelihood
+
+$$\ell(\boldsymbol{\phi}, \boldsymbol{\theta}, \sigma^2) =
+-\frac{n}{2}\log(2\pi\sigma^2) - \frac{1}{2\sigma^2}\sum_{t=1}^n \varepsilon_t^2$$
+
+where innovations $\varepsilon_t$ are computed recursively (conditional on initial values).
+
+### 53.2.3 AIC-based Model Selection
+
+$$\text{AIC} = -2\ell + 2k, \quad k = p + q + 1 + \mathbf{1}_{d>0}$$
+
+`auto_arima` evaluates a grid of $(p,d,q)$ combinations and returns the
+minimum-AIC model — analogous to `auto.arima` in R's forecast package.
+
+```julia
+# Simulate AR(1) with d=1 (ARIMA(1,1,0))
+rng = MersenneTwister(7)
+y   = cumsum(0.5 .* randn(rng, 100) .+ 0.1)
+
+m = auto_arima(y; max_p=2, max_q=1, d=1)
+println("Best model: ARIMA($(m.p),$(m.d),$(m.q))  AIC=$(round(m.aic,digits=1))")
+
+fc = arima_forecast(m, 6)
+println("6-step forecast: ", round.(fc.point, digits=1))
+println("95% PI widths:   ", round.(fc.upper_95 .- fc.lower_95, digits=1))
+```
+
+## 53.3 Dynamic Linear Models and the Kalman Filter
+
+### 53.3.1 Local Level (Random Walk + Noise)
+
+$$y_t = \mu_t + \varepsilon_t, \quad \varepsilon_t \sim N(0, \sigma^2_\varepsilon)$$
+$$\mu_t = \mu_{t-1} + \eta_t, \quad \eta_t \sim N(0, \sigma^2_\eta)$$
+
+Signal-to-noise ratio $q = \sigma^2_\eta / \sigma^2_\varepsilon$ controls smoothness.
+
+### 53.3.2 Kalman Filter Recursion
+
+**Prediction step:**
+$$a_{t|t-1} = a_{t-1|t-1}, \quad P_{t|t-1} = P_{t-1|t-1} + \sigma^2_\eta$$
+
+**Innovation:**
+$$v_t = y_t - a_{t|t-1}, \quad F_t = P_{t|t-1} + \sigma^2_\varepsilon$$
+
+**Update:**
+$$K_t = P_{t|t-1} / F_t, \quad a_{t|t} = a_{t|t-1} + K_t v_t, \quad P_{t|t} = P_{t|t-1}(1 - K_t)$$
+
+**Log-likelihood** (prediction error decomposition):
+$$\log L = -\frac{n}{2}\log(2\pi) - \frac{1}{2}\sum_{t=1}^n \left[\log F_t + \frac{v_t^2}{F_t}\right]$$
+
+### 53.3.3 RTS Smoother (Backward Pass)
+
+$$a_{t|T} = a_{t|t} + G_t(a_{t+1|T} - a_{t+1|t}), \quad G_t = P_{t|t} / P_{t+1|t}$$
+
+```julia
+rng = MersenneTwister(9)
+y_t = cumsum(0.05 .+ 0.3*randn(rng, 80))
+
+m_dlm = dlm_fit(y_t; max_iter=30)
+println("σ²_ε = ", round(m_dlm.σ²_ε, digits=3), "  σ²_η = ", round(m_dlm.σ²_η, digits=3))
+println("Log-lik: ", round(m_dlm.log_lik, digits=1))
+
+fc_dlm = dlm_predict(m_dlm, y_t, 4)
+println("4-step DLM forecast: ", round.(fc_dlm.mean, digits=2))
+```
+
+## 53.4 Outbreak Detection Algorithms
+
+### 53.4.1 CUSUM (Page 1954)
+
+$$C_0 = 0, \quad C_t = \max\!\left(0,\; C_{t-1} + \frac{y_t - \mu_0}{\sigma_0} - k\right)$$
+
+Alarm when $C_t > h$ (threshold). Allowance $k = 0.5$ detects shifts ≥ $1\sigma$.
+$h = 4$ gives approximately 1 false alarm per 500 observations.
+
+### 53.4.2 Farrington Algorithm (Farrington et al. 1996)
+
+For week $t$, fit a weighted Poisson GLM on historical reference weeks:
+
+$$\log(\mu_t) = \alpha + \beta \cdot t \quad \text{(over reference windows)}$$
+
+Winsorized weights $w_i = \min(1, q_{95}/y_i)$ downweight past epidemics.
+
+Overdispersion estimated as $\hat{\phi} = X^2 / (n-p)$.
+
+Upper threshold: $\hat{\mu}_t + z_{1-\alpha}\sqrt{\hat{\phi}\hat{\mu}_t}$.
+
+Noufaily et al. (2013) improved version is now standard in ECDC EuroMOMO.
+
+### 53.4.3 Poisson EWMA (Borror et al. 1998)
+
+$$Z_t = \lambda y_t + (1-\lambda) Z_{t-1}, \quad Z_0 = \mu_0$$
+
+$$\text{UCL} = \mu_0 + L\sqrt{\frac{\lambda}{2-\lambda}\mu_0}$$
+
+$\lambda = 0.2$ provides good balance between sensitivity and specificity.
+
+```julia
+# Weekly count series with injected outbreak at weeks 65-73
+rng = MersenneTwister(3)
+n   = 104
+y_c = Float64.([round(Int, 12 + 3*randn(rng)) for _ in 1:n])
+for t in 65:73; y_c[t] *= 2.5; end
+
+# CUSUM
+cr  = cusum_detect(y_c; μ0=12.0, σ0=3.0, threshold=4.0, k=0.5)
+println("CUSUM alarms at weeks: ", cr.alarm_times[1:min(6, end)])
+
+# Farrington (needs 2 years history)
+fr  = farrington_detect(y_c; n_years=1, period=52, w=2)
+println("Farrington alarms: ", sum(fr.alarms), " total")
+
+# EWMA
+er  = poisson_ewma(y_c; λ=0.2, L=3.0)
+println("EWMA alarms at weeks: ", er.alarm_times[1:min(6, end)])
+
+# Combined
+s   = aberration_summary(y_c, cr, fr, er)
+println("Combined alarm rate: ", round(100*s.alarm_rate, digits=1), "%")
+```
+
+## 53.5 Forecast Evaluation
+
+### 53.5.1 Rolling-Origin Cross-Validation
+
+At each origin $t = n_{\min}, n_{\min}+1, \ldots, n-h$:
+
+1. Fit model on $y_1, \ldots, y_t$
+2. Forecast $\hat{y}_{t+h}$
+3. Compare to actual $y_{t+h}$
+
+Metrics:
+$$\text{RMSE} = \sqrt{\frac{1}{M}\sum_{m=1}^M (\hat{y}_{t_m+h} - y_{t_m+h})^2}$$
+$$\text{Coverage}_{1-\alpha} = \frac{1}{M}\sum_{m=1}^M \mathbf{1}(y_{t_m+h} \in \text{PI}_{t_m})$$
+
+A well-calibrated 95% PI should achieve ≈ 95% empirical coverage.
+
+```julia
+rng = MersenneTwister(11)
+y   = cumsum(0.3 .+ 0.5*randn(rng, 80))
+cv  = rolling_cv(y, 1; min_train=30, model_type=:arima, step=3)
+println("Rolling CV (ARIMA):  RMSE=$(round(cv.rmse,digits=3)), " *
+        "95% coverage=$(round(100*cv.coverage_95,digits=1))%")
+```
+
+## 53.6 Selecting the Right Surveillance Method
+
+| Method | Data type | Strengths | Limitations |
+|--------|-----------|-----------|-------------|
+| CUSUM | Continuous/counts | Fast detection, simple | Requires known μ₀, σ₀ |
+| Farrington | Weekly counts | Historical baselines, seasonality | Needs ≥2 years |
+| Poisson EWMA | Counts | Smooth, low computation | Fixed baseline, may lag |
+| Bayesian (BEAST) | Any | Full uncertainty, change-point | Complex, slow |
+
+For routine ND public health surveillance we recommend:
+1. Farrington as primary (adjusts for seasonal patterns)
+2. CUSUM as rapid early-warning complement
+3. Cross-validate sensitivity/specificity annually on known outbreak years
+
+## 53.7 Exercises
+
+1. **Differencing**: Take the first difference of weekly ED admissions. Plot
+   and compare ACF before and after differencing. Is the series stationary?
+2. **auto_arima**: Fit an ARIMA model to the count series. Does the selected
+   model match the ACF/PACF patterns you identified?
+3. **Kalman vs ARIMA**: Compare 4-week ahead RMSE from the DLM and ARIMA via
+   rolling cross-validation on the same dataset. Which performs better?
+4. **Farrington threshold**: Change `alpha` from 0.05 to 0.01. How does this
+   affect sensitivity and specificity on the simulated outbreak series?
+5. **Bootstrap PI**: Use `bootstrap_forecast_pi` to generate 90% prediction
+   intervals. Are they wider or narrower than the analytic Gaussian PI?
+   What assumption does each rely on?

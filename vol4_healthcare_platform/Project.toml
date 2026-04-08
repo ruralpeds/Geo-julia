@@ -1,0 +1,17 @@
+[workspace]
+packages = ["packages/PointPatterns"]
+
+[deps]
+CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
+DataFrames = "a93c6f00-e57d-5684-b466-afe8fa294f15"
+Genie = "c43c736e-a2d1-11e8-161f-af95117fbd1e"
+HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
+JSON3 = "0f8b85d8-7e73-4b43-9ea0-90b478853c4c"
+NearestNeighbors = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
+PlutoUI = "7f904dfe-b85e-4ff6-b463-dae2292396a8"
+Serialization = "9e88b42a-f829-5b0c-bbe9-9e923198166b"
+SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+
+[compat]
+julia = "1.10"

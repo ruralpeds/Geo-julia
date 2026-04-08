@@ -1,0 +1,59 @@
+name: Test Vol 3 — Julia Geo Packages
+
+on:
+  push:
+    branches: [main, "claude/**"]
+    paths:
+      - 'julia_geo_packages/**'
+  pull_request:
+    paths:
+      - 'julia_geo_packages/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        julia-version: ['1.10', '1.11']
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+
+      - uses: julia-actions/cache@v2
+
+      - name: "Test SpatialStats.jl"
+        run: |
+          julia --project=julia_geo_packages/packages/SpatialStats -e '
+            using Pkg
+            Pkg.instantiate()
+            Pkg.test()
+          '
+
+      - name: "Test MapClassify.jl"
+        run: |
+          julia --project=julia_geo_packages/packages/MapClassify -e '
+            using Pkg
+            Pkg.instantiate()
+            Pkg.test()
+          '
+
+      - name: "Test Geocode.jl"
+        run: |
+          julia --project=julia_geo_packages/packages/Geocode -e '
+            using Pkg
+            Pkg.instantiate()
+            Pkg.test()
+          '
+
+      - name: "Test Overpass.jl"
+        run: |
+          julia --project=julia_geo_packages/packages/Overpass -e '
+            using Pkg
+            Pkg.instantiate()
+            Pkg.test()
+          '

@@ -1,0 +1,196 @@
+---
+title: "Chapter 49: Geographically Weighted and Global Spatial Regression"
+subtitle: "GWR, Spatial Lag, Spatial Error, and GW-RF Models"
+---
+
+# Chapter 49: Geographically Weighted and Spatial Regression Models
+
+> "Everything is related to everything else, but near things are
+> more related than distant things."
+> — Tobler's First Law of Geography (1970)
+
+## 49.1 The Problem of Spatial Non-Stationarity
+
+Classic OLS assumes that the relationship between covariates and outcome is
+**stationary** — identical everywhere.  For healthcare access:
+
+- The poverty-access relationship may be steeper in urban areas (many
+  competing providers) than in rural areas (few providers regardless).
+- Insurance effects may vary by Medicaid expansion status (a spatial policy).
+- Distance effects diminish where telehealth is prevalent.
+
+**Spatial non-stationarity** violates OLS assumptions and calls for either:
+1. **Global spatial models** (spatial lag/error): account for spatial
+   autocorrelation but assume fixed coefficients.
+2. **Local spatial models** (GWR): allow coefficients to vary continuously
+   across space.
+
+## 49.2 Spatial Diagnostics: When to Use Spatial Models
+
+Before choosing a model, diagnose the OLS residuals:
+
+```julia
+using SpatialRegression
+
+# Fit OLS and extract residuals
+X_aug = hcat(ones(n), X)
+β_ols = (X_aug'X_aug + 1e-8I) \ X_aug'y
+e_ols = y .- X_aug * β_ols
+
+# Build spatial weights (4-NN, row-normalised)
+D = distance_matrix(coords)
+# ... (build W from D as shown in spatial_pipeline.jl)
+
+diag = run_diagnostics(e_ols, X, W; permutations=999)
+println(diag)
+```
+
+**Decision rule** (Anselin 1988):
+| Test | Significant? | Recommended model |
+|------|-------------|------------------|
+| Moran's I | Yes | Spatial model needed |
+| LM-lag | Yes, LM-lag < LM-error | Spatial lag |
+| LM-error | Yes, LM-error < LM-lag | Spatial error |
+| Both | Both significant | Estimate both; compare AIC |
+
+## 49.3 Global Spatial Models
+
+### 49.3.1 Spatial Lag Model
+
+$$Y = \rho WY + X\beta + \varepsilon, \quad \varepsilon \sim \mathcal{N}(0, \sigma^2 I)$$
+
+The spatial lag term $\rho WY$ captures **spatial spillovers**: a county's
+access score is partially determined by neighbouring counties' scores.
+
+ML estimation profiles $\rho$ out using the spectral decomposition of $W$:
+
+$$\log L(\rho) = \sum_i \log(1-\rho\lambda_i) - \frac{n}{2}\log(\text{RSS}(\rho))$$
+
+```julia
+m_lag = spatial_lag_fit(y, X, W; feature_names=["poverty","rural","distance"])
+println(m_lag)
+# SpatialLagModel (n=53)
+#   ρ (spatial lag): 0.3812 (se=0.0892)   ← significant positive spillover
+#   Coefficients:
+#     intercept       β=0.00842
+#     poverty         β=-0.02413
+#     rural           β=-0.01876
+```
+
+### 49.3.2 Spatial Error Model
+
+$$Y = X\beta + u, \quad u = \lambda Wu + \varepsilon$$
+
+Spatial error captures unobserved spatially correlated variables.
+The efficient GLS estimator uses the Prais-Winsten transformation $(I-\lambda W)$:
+
+```julia
+m_err = spatial_error_fit(y, X, W)
+println("AIC comparison:")
+println("  Lag:   $(round(m_lag.aic;digits=2))")
+println("  Error: $(round(m_err.aic;digits=2))")
+```
+
+## 49.4 Geographically Weighted Regression
+
+### 49.4.1 Model Specification
+
+GWR fits **local OLS** at each observation location $u_i$:
+
+$$\hat{\beta}_i = (X'W_i X)^{-1} X'W_i y$$
+
+where $W_i = \text{diag}(K(d_{ij}/b))$ is a diagonal matrix of spatial kernel weights.
+
+**Gaussian kernel**: $K(d,b) = \exp(-d^2/2b^2)$ — smooth, global support
+
+**Bisquare kernel**: $K(d,b) = (1-(d/b)^2)^2 \cdot \mathbf{1}(d<b)$ — compact support
+
+### 49.4.2 Bandwidth Selection
+
+The bandwidth $b$ controls the **locality** of the model.
+Optimal $b$ minimises the corrected AIC (AIC-c):
+
+$$\text{AIC}_c = n\log(\sigma^2) + n\frac{n + \text{tr}(H)}{n - \text{tr}(H) - 2}$$
+
+```julia
+# Auto-select bandwidth
+b_opt = bandwidth_aic(y, X, coords; n_candidates=15)
+println("Optimal bandwidth: $(round(b_opt;digits=3)) (distance units)")
+
+# Fit GWR
+m_gwr = gwr_fit(y, X, coords;
+                 bandwidth     = b_opt,
+                 kernel        = :bisquare,
+                 feature_names = ["poverty", "rural", "distance"])
+println(m_gwr)
+```
+
+### 49.4.3 Interpreting Spatial Non-Stationarity
+
+```julia
+# Get per-observation coefficient estimates
+df = gwr_summary(m_gwr)
+
+# Map the poverty coefficient across space
+# β_poverty varies from west to east:
+println("Poverty β range: [$(round(minimum(m_gwr.local_β[:,2]);digits=4)), " *
+        "$(round(maximum(m_gwr.local_β[:,2]);digits=4))]")
+println("  Western counties: stronger poverty-access relationship")
+println("  Eastern counties: weaker (other factors dominate)")
+
+# Identify locally significant coefficients
+sig_poverty = abs.(m_gwr.local_t[:, 2]) .> 1.96
+println("Poverty significant (|t|>1.96) in $(sum(sig_poverty))/$(m_gwr.n) counties")
+```
+
+### 49.4.4 Mapping Local Coefficients
+
+The GWR summary DataFrame is ready for spatial visualisation:
+
+```julia
+gwr_df = gwr_summary(m_gwr)
+# Columns: fitted, residual, local_r2, β_intercept, β_poverty, β_rural, β_distance, ...
+
+# Attach to county geometry for mapping (using Vols 3-4 spatial tools)
+# plot(county_shapes, color=gwr_df.β_poverty, colormap=:RdBu,
+#      title="Local poverty coefficient (GWR)")
+```
+
+## 49.5 Geographically Weighted Random Forest
+
+For non-linear local relationships:
+
+```julia
+m_rf = gwrf_fit(y, X, coords;
+                 bandwidth  = b_opt,
+                 n_trees    = 100,
+                 max_depth  = 4,
+                 kernel     = :gaussian)
+
+# Predict with local uncertainty
+μ_pred, σ_pred = gwrf_predict(m_rf, X_new, coords_new)
+println("Prediction at new location: $(round(μ_pred[1];digits=5)) ± $(round(1.96*σ_pred[1];digits=5))")
+```
+
+## 49.6 Model Comparison: Global vs Local
+
+| Model | Assumption | AIC | Use when |
+|-------|-----------|-----|---------|
+| OLS | Stationary, independent | baseline | No spatial structure |
+| Spatial Lag | Stationary, spillovers | lower if spillovers exist | Outcome diffuses spatially |
+| Spatial Error | Stationary, omitted variables | lower if unobserved spatial factor | Residuals autocorrelated |
+| GWR | Non-stationary relationships | may be lower | Coefficients vary geographically |
+| GW-RF | Non-stationary, non-linear | — | Complex spatial non-linearity |
+
+## References
+
+- Fotheringham, A. S., Brunsdon, C., & Charlton, M. (2002). *Geographically
+  Weighted Regression*. Wiley.
+- Anselin, L. (1988). *Spatial Econometrics: Methods and Models*. Kluwer.
+- LeSage, J. P., & Pace, R. K. (2009). *Introduction to Spatial Econometrics*.
+  CRC Press.
+- Georganos, S., et al. (2019). Geographical random forests: a spatial
+  extension of the random forest algorithm to address spatial heterogeneity
+  in remote sensing and population modelling. *Geocarto International*.
+- Tobler, W. R. (1970). A computer movie simulating urban growth in the
+  Detroit region. *Economic Geography*, 46(Sup 1), 234–240.

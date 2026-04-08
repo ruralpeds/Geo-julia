@@ -1,0 +1,12 @@
+name = "NetworkHealth"
+uuid = "d4e5f6a7-b8c9-0123-4567-890abcdef134"
+authors = ["Open Healthcare Textbook Contributors"]
+version = "0.1.0"
+
+[deps]
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+
+[compat]
+julia = "1.10"

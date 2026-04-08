@@ -1,0 +1,181 @@
+name: Vol 9 — Survival Analysis, Network Health & Time-Series Outbreak
+
+on:
+  push:
+    branches: ["main", "claude/**"]
+    paths:
+      - "vol9_survival_networks_ts/**"
+      - ".github/workflows/test_vol9.yml"
+  pull_request:
+    paths:
+      - "vol9_survival_networks_ts/**"
+      - ".github/workflows/test_vol9.yml"
+
+defaults:
+  run:
+    working-directory: vol9_survival_networks_ts
+
+jobs:
+  # ── SurvivalAnalysis ───────────────────────────────────────────────────────
+  test-survivalanalysis:
+    name: "SurvivalAnalysis.jl — KM, Cox, AFT, Competing Risks"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ["1.10", "1.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Julia ${{ matrix.julia-version }}
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+
+      - name: Cache Julia packages
+        uses: julia-actions/cache@v2
+
+      - name: Install dependencies
+        run: |
+          julia --project=packages/SurvivalAnalysis -e '
+            using Pkg; Pkg.instantiate()
+          '
+
+      - name: Run SurvivalAnalysis tests
+        run: |
+          julia --project=packages/SurvivalAnalysis -e '
+            using Pkg; Pkg.test("SurvivalAnalysis"; coverage=true)
+          '
+
+      - name: Upload coverage
+        uses: julia-actions/julia-processcoverage@v1
+        if: matrix.julia-version == '1.10'
+        with:
+          directories: packages/SurvivalAnalysis/src
+
+  # ── NetworkHealth ──────────────────────────────────────────────────────────
+  test-networkhealth:
+    name: "NetworkHealth.jl — Graphs, SIR/SEIR/SEIRD, Facilities"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ["1.10", "1.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Julia ${{ matrix.julia-version }}
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+
+      - name: Cache Julia packages
+        uses: julia-actions/cache@v2
+
+      - name: Install dependencies
+        run: |
+          julia --project=packages/NetworkHealth -e '
+            using Pkg; Pkg.instantiate()
+          '
+
+      - name: Run NetworkHealth tests
+        run: |
+          julia --project=packages/NetworkHealth -e '
+            using Pkg; Pkg.test("NetworkHealth"; coverage=true)
+          '
+
+      - name: Upload coverage
+        uses: julia-actions/julia-processcoverage@v1
+        if: matrix.julia-version == '1.10'
+        with:
+          directories: packages/NetworkHealth/src
+
+  # ── TimeSeriesHealth ───────────────────────────────────────────────────────
+  test-timeserieshealth:
+    name: "TimeSeriesHealth.jl — ARIMA, Kalman, CUSUM, Farrington"
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        julia-version: ["1.10", "1.11"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Julia ${{ matrix.julia-version }}
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+
+      - name: Cache Julia packages
+        uses: julia-actions/cache@v2
+
+      - name: Install dependencies
+        run: |
+          julia --project=packages/TimeSeriesHealth -e '
+            using Pkg; Pkg.instantiate()
+          '
+
+      - name: Run TimeSeriesHealth tests
+        run: |
+          julia --project=packages/TimeSeriesHealth -e '
+            using Pkg; Pkg.test("TimeSeriesHealth"; coverage=true)
+          '
+
+      - name: Upload coverage
+        uses: julia-actions/julia-processcoverage@v1
+        if: matrix.julia-version == '1.10'
+        with:
+          directories: packages/TimeSeriesHealth/src
+
+  # ── Integration tests ──────────────────────────────────────────────────────
+  test-integration:
+    name: "Vol 9 Integration — Cross-package workflows"
+    runs-on: ubuntu-latest
+    needs: [test-survivalanalysis, test-networkhealth, test-timeserieshealth]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Julia 1.10
+        uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.10"
+
+      - name: Cache Julia packages
+        uses: julia-actions/cache@v2
+
+      - name: Install workspace dependencies
+        run: julia -e 'using Pkg; Pkg.activate("."); Pkg.instantiate()'
+
+      - name: Run integration tests
+        run: julia -e 'include("test/integration_test.jl")'
+
+      - name: Run survival analysis script (smoke test)
+        run: julia scripts/survival_analysis.jl
+        continue-on-error: true
+
+      - name: Run network epidemic script (smoke test)
+        run: julia scripts/network_epidemic.jl
+        continue-on-error: true
+
+      - name: Run time-series outbreak script (smoke test)
+        run: julia scripts/ts_outbreak.jl
+        continue-on-error: true
+
+  # ── Status ─────────────────────────────────────────────────────────────────
+  vol9-status:
+    name: "Vol 9 — All tests passed"
+    runs-on: ubuntu-latest
+    needs: [test-survivalanalysis, test-networkhealth, test-timeserieshealth, test-integration]
+    if: always()
+    steps:
+      - name: Check all jobs passed
+        run: |
+          if [[ "${{ needs.test-survivalanalysis.result }}"   == "success" &&
+                "${{ needs.test-networkhealth.result }}"      == "success" &&
+                "${{ needs.test-timeserieshealth.result }}"   == "success" &&
+                "${{ needs.test-integration.result }}"        == "success" ]]; then
+            echo "All Vol 9 tests passed."
+          else
+            echo "One or more Vol 9 jobs failed."
+            exit 1
+          fi

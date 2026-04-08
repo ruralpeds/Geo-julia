@@ -1,0 +1,297 @@
+---
+title: "Chapter 46: Bayesian Inference for Healthcare Data"
+subtitle: "Variational Inference, MCMC, and Model Comparison"
+---
+
+# Chapter 46: Bayesian Inference for Healthcare Data
+
+> "The Bayesian approach to statistics is based on the idea that probability
+> can be interpreted as a degree of belief, and Bayes' theorem provides
+> a principled way to update those beliefs in light of new data."
+> — Gelman, Carlin, Stern & Rubin (2013)
+
+## 46.1 The Bayesian Workflow
+
+The Bayesian workflow for healthcare data consists of five steps:
+
+1. **Prior specification**: Encode domain knowledge as $p(\theta)$
+2. **Likelihood specification**: Choose $p(y|\theta)$
+3. **Posterior computation**: $p(\theta|y) \propto p(y|\theta) p(\theta)$
+4. **Model criticism**: Prior/posterior predictive checks; LOO-CV
+5. **Inference & decision**: Posterior summaries, credible intervals, decisions
+
+The key advantage over frequentist inference: every uncertain quantity gets a
+full probability distribution, not just a point estimate and p-value.
+
+## 46.2 Domain-Informed Priors for Healthcare
+
+Choosing priors should reflect domain knowledge, not just mathematical convenience.
+
+```julia
+using BayesianHealth
+
+# Mortality rate: expected ~5%, sample-size-equivalent ESS=20
+p_mort = rate_prior(; mean_rate=0.05, effective_n=20.0, name="mortality_rate")
+println(p_mort)
+
+# Per-patient cost: median \$8,000 with high variability
+p_cost = cost_prior(; median_cost=8000.0, cv=2.0, name="per_patient_cost")
+
+# Insurance type proportions (Medicare/Medicaid/Private/Uninsured)
+p_ins = proportion_prior(4; concentration=2.0, name="insurance_mix")
+
+# E2SFCA access score prior
+p_acc = access_score_prior(; mean_access=0.004, sd_access=0.002)
+```
+
+### Prior Predictive Check
+
+Before fitting, verify priors produce plausible outcomes:
+
+```julia
+priors = Dict(
+    "β0" => regression_coef_prior(; scale=1.0),
+    "β1" => regression_coef_prior(; scale=1.0),
+    "σ"  => noise_prior(; scale=0.5),
+)
+
+# Linear model: y ~ N(β0 + β1·x, σ²)
+x_typical = 0.5  # standardised covariate
+model_fn(p) = p["β0"] .+ p["β1"] .* x_typical .+ randn(10) .* p["σ"]
+
+ppc = prior_predictive_check(priors, model_fn, 100)
+# Check: are prior predictive outcomes in a plausible range for access scores?
+```
+
+## 46.3 Variational Inference
+
+For large $n$ or complex models where MCMC is slow, **variational inference**
+approximates the posterior with a tractable family $q_\phi(z)$.
+
+### 46.3.1 Mean-Field Gaussian VI
+
+$$q(z) = \prod_i \mathcal{N}(z_i | \mu_i, \sigma_i^2)$$
+
+Optimise the ELBO (Evidence Lower Bound):
+
+$$\text{ELBO}(\phi) = \mathbb{E}_{q_\phi}[\log p(y, z)] - \mathbb{E}_{q_\phi}[\log q_\phi(z)]$$
+$$= \underbrace{\mathbb{E}_{q_\phi}[\log p(y|z)]}_{\text{data fit}} + \underbrace{\mathbb{E}_{q_\phi}[\log p(z)]}_{\text{prior}} + \underbrace{\mathcal{H}[q_\phi]}_{\text{entropy}}$$
+
+### 46.3.2 Reparameterization Trick
+
+Unbiased gradient estimate via $z = \mu + \sigma \odot \varepsilon$, $\varepsilon \sim \mathcal{N}(0, I)$:
+
+$$\nabla_\phi \text{ELBO} = \mathbb{E}_{\varepsilon}\left[\nabla_\phi \log p(y, z(\phi, \varepsilon))\right] + \nabla_\phi \mathcal{H}[q_\phi]$$
+
+```julia
+# Bayesian linear regression via VI
+# y = X·β + ε, β ~ N(0, 2.5²), ε ~ N(0, σ²)
+function make_log_joint(X, y; σ²_noise=0.1)
+    n, p = size(X)
+    function log_joint(z)
+        β = z[1:p]
+        # log p(β): standard Normal prior
+        lp = sum(logpdf(Normal(0, 2.5), βi) for βi in β)
+        # log p(y | X, β): Gaussian likelihood
+        μ = X * β
+        ll = log_likelihood_normal(y, μ, σ²_noise)
+        lp + ll
+    end
+end
+
+# Simulate data
+X = randn(100, 3)
+true_β = [0.8, -0.5, 1.2]
+y = X * true_β .+ 0.3*randn(100)
+
+log_jt = make_log_joint(X, y)
+result = vi_fit(log_jt, 3;
+                n_iter    = 500,
+                lr        = 0.05,
+                param_names = ["β₁","β₂","β₃"])
+
+println("VI posterior means: $(round.(result.q.μ; digits=2))")
+println("VI posterior stds:  $(round.(σ_of(result.q); digits=2))")
+println("True β:             $(true_β)")
+println("Converged: $(result.converged)")
+```
+
+### 46.3.3 Posterior Predictive Distribution
+
+```julia
+# Predict on new data with uncertainty
+X_new = randn(10, 3)
+predict_fn(z, X) = X' * z   # linear prediction
+μ_pred, σ_pred = vi_predict(result, X_new', predict_fn; n_samples=500)
+
+for i in 1:5
+    println("y_new[$i]: $(round(μ_pred[i];digits=3)) ± $(round(1.96*σ_pred[i];digits=3)) (95% CI)")
+end
+```
+
+## 46.4 Hamiltonian Monte Carlo
+
+For exact posterior sampling, **HMC** uses gradient information to make
+large, efficient proposals with high acceptance rates.
+
+### 46.4.1 Leapfrog Integrator
+
+HMC simulates Hamiltonian dynamics $H(\theta, p) = U(\theta) + K(p)$:
+- **Potential energy**: $U(\theta) = -\log p(\theta | y)$
+- **Kinetic energy**: $K(p) = \frac{1}{2} p^T M^{-1} p$
+
+Leapfrog integration:
+$$p_{t+\varepsilon/2} = p_t - \frac{\varepsilon}{2} \nabla_\theta U(\theta_t)$$
+$$\theta_{t+\varepsilon} = \theta_t + \varepsilon M^{-1} p_{t+\varepsilon/2}$$
+$$p_{t+\varepsilon} = p_{t+\varepsilon/2} - \frac{\varepsilon}{2} \nabla_\theta U(\theta_{t+\varepsilon})$$
+
+```julia
+# Sample from a 2D Gaussian (correlated)
+Σ_true = [1.0 0.8; 0.8 1.0]
+L_true = cholesky(Σ_true).L
+log_p(θ) = -0.5 * dot(θ, Σ_true \ θ) - 0.5*log(det(Σ_true))
+
+hmc = HMCSampler(; step_size=0.15, n_leapfrog=10)
+chains = sample_chains(hmc, log_p, zeros(2);
+                         n_iter=2000, n_warmup=500, n_chains=4,
+                         param_names=["θ₁","θ₂"])
+
+summary = chain_summary(chains)
+println(summary)
+```
+
+### 46.4.2 Convergence Diagnostics
+
+**R-hat** (Gelman-Rubin): $\hat{R} = \sqrt{(B/n + W(1-1/n)) / W}$
+- $\hat{R} < 1.05$: chains well-mixed (convergence likely)
+- $\hat{R} > 1.1$: chains not converged (need more iterations)
+
+**ESS** (effective sample size): accounts for autocorrelation.
+Target: ESS > 400 for reliable posterior quantiles.
+
+```julia
+rh  = r_hat(chains)
+es  = ess(chains)
+println("R-hat: $(round.(rh; digits=3))")   # should be near 1.0
+println("ESS:   $(round.(es; digits=0))")   # should be >> 1
+```
+
+## 46.5 Metropolis-Hastings for Simple Models
+
+For low-dimensional problems where gradients are unavailable:
+
+```julia
+# Beta-Binomial model: mortality rate estimation
+# n_deaths ~ Binomial(n_patients, θ), θ ~ Beta(2, 20) (prior: ~9% mean)
+n_patients = 500; n_deaths = 38
+
+log_p_mort(θ_vec) = begin
+    θ = θ_vec[1]
+    (0 < θ < 1) || return -Inf
+    logpdf(Binomial(n_patients, θ), n_deaths) + logpdf(Beta(2, 20), θ)
+end
+
+mh = MetropolisHastings(; step_size=0.02)
+chains = sample_chains(mh, log_p_mort, [0.08];
+                         n_iter=5000, n_warmup=1000,
+                         n_chains=4, param_names=["θ_mortality"])
+
+df = chain_summary(chains)
+println("Posterior mortality rate:")
+println("  Mean: $(round(df.mean[1]; digits=4))")
+println("  95% CI: ($(round(df.q5[1];digits=4)), $(round(df.q95[1];digits=4)))")
+println("  R-hat: $(round(df.r_hat[1]; digits=3))")
+```
+
+## 46.6 Bayesian Model Comparison
+
+### 46.6.1 WAIC
+
+Watanabe-Akaike Information Criterion (Watanabe 2010):
+
+$$\text{WAIC} = -2\left(\widehat{\text{lppd}} - p_{\text{WAIC}}\right)$$
+
+where $\widehat{\text{lppd}} = \sum_i \log \frac{1}{S}\sum_s p(y_i|\theta^s)$
+and $p_{\text{WAIC}} = \sum_i \text{Var}_s[\log p(y_i|\theta^s)]$.
+
+```julia
+# Compare two regression models
+# Model 1: linear (3 params); Model 2: quadratic (6 params)
+S, N = 1000, 53   # 1000 posterior samples, 53 counties
+
+log_lik_linear = randn(S, N) .- 1.5    # simulated log-likelihoods
+log_lik_quadratic = randn(S, N) .- 1.2  # slightly better fit
+
+w1 = waic(log_lik_linear)
+w2 = waic(log_lik_quadratic)
+
+println("WAIC (linear):    $(round(w1.waic; digits=1)) ± $(round(w1.se; digits=1))")
+println("WAIC (quadratic): $(round(w2.waic; digits=1)) ± $(round(w2.se; digits=1))")
+println("p_WAIC (linear):  $(round(w1.p_waic; digits=1)) parameters")
+```
+
+### 46.6.2 LOO-IC with PSIS
+
+PSIS-LOO is more robust than WAIC for misspecified models:
+
+```julia
+models_ll = Dict(
+    "Linear GP"     => log_lik_linear,
+    "Quadratic GP"  => log_lik_quadratic,
+)
+comparison = compare_models_bayes(models_ll; criterion=:loo)
+println(comparison)
+```
+
+Observations with Pareto $\hat{k} > 0.7$ are influential and may indicate
+model misspecification.
+
+## 46.7 Bayesian Workflow in Practice: County Access Rates
+
+End-to-end example for North Dakota county mortality rate estimation:
+
+```julia
+# Hierarchical Beta-Binomial model
+# θ_c ~ Beta(α, β) for each county c
+# n_deaths_c ~ Binomial(n_patients_c, θ_c)
+# Hyper-priors: α ~ Exp(1), β ~ Exp(1)
+
+n_counties = 53
+n_patients = rand(100:500, n_counties)
+true_rates = rand(Beta(3, 30), n_counties)
+n_deaths = [rand(Binomial(n_patients[c], true_rates[c])) for c in 1:n_counties]
+
+function log_joint_hierarchical(z)
+    α, β = exp(z[1]), exp(z[2])   # log-parameterised
+    θ = sigmoid.(z[3:end])         # county-level rates in (0,1)
+
+    lp = logpdf(Exponential(1), α) + logpdf(Exponential(1), β)
+    for c in 1:n_counties
+        lp += logpdf(Beta(α, β), θ[c])
+        lp += logpdf(Binomial(n_patients[c], θ[c]), n_deaths[c])
+    end
+    lp
+end
+
+result = vi_fit(log_joint_hierarchical, 2 + n_counties;
+                n_iter=500, lr=0.05, verbose=true)
+
+# Extract posterior county rates
+θ_post_mean = sigmoid.(result.q.μ[3:end])
+println("Mean posterior mortality rate: $(round(mean(θ_post_mean); digits=4))")
+println("True mean mortality rate:      $(round(mean(true_rates); digits=4))")
+```
+
+## References
+
+- Gelman, A., Carlin, J. B., Stern, H. S., Dunson, D. B., Vehtari, A., &
+  Rubin, D. B. (2013). *Bayesian Data Analysis* (3rd ed.). CRC Press.
+- Watanabe, S. (2010). Asymptotic equivalence of Bayes cross validation and
+  widely applicable information criterion. *JMLR*, 11, 3571–3594.
+- Vehtari, A., Gelman, A., & Gabry, J. (2017). Practical Bayesian model
+  evaluation using leave-one-out cross-validation and WAIC. *Statistics and
+  Computing*, 27(5), 1413–1432.
+- Neal, R. M. (2011). MCMC using Hamiltonian dynamics. In *Handbook of Markov
+  Chain Monte Carlo* (pp. 113–162). CRC Press.
+- Gelman, A., & Rubin, D. B. (1992). Inference from iterative simulation using
+  multiple sequences. *Statistical Science*, 7(4), 457–472.

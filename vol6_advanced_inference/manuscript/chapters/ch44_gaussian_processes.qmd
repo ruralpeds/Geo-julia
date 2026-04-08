@@ -1,0 +1,163 @@
+---
+title: "Chapter 44: Gaussian Process Regression for Spatial Interpolation"
+subtitle: "Principled Uncertainty Quantification for Healthcare Access Surfaces"
+---
+
+# Chapter 44: Gaussian Process Regression
+
+> "A Gaussian process is a collection of random variables, any finite number
+> of which have a joint Gaussian distribution."
+> — Rasmussen & Williams (2006)
+
+## 44.1 Why GPs for Healthcare Access?
+
+Standard spatial interpolation (IDW, kriging) produces point estimates.
+For healthcare policy, we need more: *How confident are we* that access
+in a remote county is below the policy threshold? Gaussian Processes
+provide the complete posterior distribution — not just a prediction, but
+a calibrated measure of uncertainty.
+
+**Key advantages**:
+1. **Uncertainty quantification**: 95% credible intervals for every prediction
+2. **Kernel flexibility**: match spatial smoothness to domain knowledge
+3. **Bayesian framework**: principled integration over model uncertainty
+4. **Active learning**: identify where new data would most reduce uncertainty
+
+## 44.2 GP Foundations
+
+A GP prior over functions: $f \sim \mathcal{GP}(m(\mathbf{x}), k(\mathbf{x},\mathbf{x}'))$
+
+With Gaussian likelihood $y_i = f(\mathbf{x}_i) + \varepsilon_i$,
+$\varepsilon_i \sim \mathcal{N}(0, \sigma^2_n)$, the posterior is:
+
+$$f_* \mid \mathbf{y} \sim \mathcal{N}(\mu_*, \Sigma_*)$$
+
+$$\mu_* = \mathbf{K}_{*n}(\mathbf{K}_{nn} + \sigma^2_n \mathbf{I})^{-1}\mathbf{y}$$
+$$\Sigma_* = \mathbf{K}_{**} - \mathbf{K}_{*n}(\mathbf{K}_{nn} + \sigma^2_n \mathbf{I})^{-1}\mathbf{K}_{n*}$$
+
+## 44.3 Kernel Selection for Healthcare Data
+
+```julia
+using GaussianProcessHealth
+
+# Matérn 3/2 recommended for healthcare access surfaces
+# (once-differentiable: captures local heterogeneity)
+k_m32  = Matern32(σ²=1.0, ℓ=100.0)    # 100 km length-scale
+
+# Squared Exponential: very smooth (appropriate for demographic trends)
+k_se   = SquaredExponential(σ²=1.0, ℓ=80.0)
+
+# Composite: slow spatial trend + local variation
+k_comp = CompositeKernel(
+    SquaredExponential(σ²=0.7, ℓ=200.0),   # broad spatial trend
+    Matern32(σ²=0.3, ℓ=30.0),              # local variation
+    :sum
+)
+```
+
+### Kernel Interpretation for Geographic Data
+
+| Kernel | Length-scale | Use case |
+|--------|-------------|----------|
+| Squared Exponential | σ² = signal var; ℓ = correlation range (km) | Smooth demographic trends |
+| Matérn 3/2 | ℓ ≈ 50–150 km typical | **Healthcare access** (recommended) |
+| Matérn 5/2 | Twice differentiable | Provider density surfaces |
+| Ornstein-Uhlenbeck | Sharp local variation | Urban-rural discontinuities |
+| Rational Quadratic | α controls scale mixture | Multi-scale spatial variation |
+
+## 44.4 Fitting and Prediction
+
+```julia
+# Training data: 53 ND counties with [lat, lon] inputs
+X_train = hcat(nd_df.centroid_lat, nd_df.centroid_lon)  # 53 × 2
+y_train = nd_df.access_score                             # 53-vector
+
+# Fit GP with Matérn 3/2, geographic haversine distance
+kernel  = Matern32(σ²=0.01, ℓ=120.0)   # 120 km range
+gp      = gp_fit(X_train, y_train, kernel;
+                 σ²_noise = 0.001,
+                 dist_fn  = haversine_dist_deg)
+
+println("Log marginal likelihood: $(round(gp.log_ml; digits=2))")
+
+# Prediction on a 30×30 grid across North Dakota
+surface = spatial_gp_surface(gp, (45.9, 49.0), (-104.0, -96.5); nx=30, ny=30)
+println("Mean access range: [$(minimum(surface.mean)), $(maximum(surface.mean))]")
+println("Counties with 95% CI below 0.003: $(count(surface.upper_95 .< 0.003))")
+```
+
+## 44.5 Hyperparameter Optimisation
+
+```julia
+# Type-II ML: maximise log p(y|θ)
+gp_opt = optimize_hyperparams!(kernel, X_train, y_train;
+                                σ²_noise  = 0.001,
+                                n_restarts = 5,
+                                dist_fn    = haversine_dist_deg)
+
+println("Optimised length-scale: $(round(gp_opt.kernel.ℓ; digits=1)) km")
+println("Optimised signal var:   $(round(gp_opt.kernel.σ²; digits=4))")
+println("Log ML (default):  $(round(gp.log_ml; digits=2))")
+println("Log ML (optimised): $(round(gp_opt.log_ml; digits=2))")
+```
+
+### Marginal Likelihood Surface
+
+The log marginal likelihood landscape helps diagnose identifiability:
+
+```julia
+lml = marginal_likelihood_surface(
+    (s,l) -> Matern32(σ²=s, ℓ=l),
+    X_train, y_train,
+    [0.001, 0.005, 0.01, 0.05],    # σ² grid
+    [50.0, 100.0, 150.0, 200.0];   # ℓ grid (km)
+    σ²_noise = 0.001
+)
+# visualise as heatmap: rows = σ², columns = ℓ
+```
+
+## 44.6 Uncertainty Maps for Policy
+
+The GP posterior gives probability statements directly useful for policy:
+
+```julia
+# P(access < 0.003) for each predicted location
+threshold = 0.003
+prob_below = exceedance_probability(gp_opt, surface[!, [:lat,:lon]] |> Matrix,
+                                     threshold)
+
+n_critical = count(prob_below .> 0.8)
+println("Grid cells with P(access < threshold) > 80%: $n_critical")
+```
+
+**Policy application**: Identify contiguous "access desert" regions where
+the probability of critically low access exceeds 80%, and prioritise
+them for rural health clinic placement.
+
+## 44.7 Sparse GP for Large Datasets
+
+When $n > 500$ (e.g., census tract-level analysis), exact GP is O(n³).
+The FITC sparse GP reduces this to O(nm²):
+
+```julia
+# Census tract data: n = 2,400 North Dakota tracts
+gp_sparse = sparse_gp_fit(X_tracts, y_tracts, Matern32(σ²=0.01, ℓ=50.0);
+                            m_inducing = 80,   # 80 inducing points
+                            σ²_noise   = 0.001,
+                            dist_fn    = haversine_dist_deg)
+
+println("ELBO: $(round(gp_sparse.log_elbo; digits=2))")
+μ, v, σ = sparse_gp_predict(gp_sparse, X_test)
+```
+
+Inducing points are placed at k-means centroids of the training data,
+ensuring broad spatial coverage.
+
+## References
+
+- Rasmussen, C. E., & Williams, C. K. I. (2006). *Gaussian Processes for
+  Machine Learning*. MIT Press.
+- Snelson, E., & Ghahramani, Z. (2006). Sparse Gaussian processes using
+  pseudo-inputs. *NeurIPS 19*, 1257–1264.
+- Stein, M. L. (1999). *Interpolation of Spatial Data: Some Theory for
+  Kriging*. Springer.

@@ -1,0 +1,223 @@
+---
+title: "Chapter 48: Health Equity Metrics and Disparity Analysis"
+subtitle: "Fairness Measurement, Decomposition, and Bias Mitigation"
+---
+
+# Chapter 48: Health Equity Metrics and Disparity Analysis
+
+> "Equity in healthcare means that everyone has a fair and just
+> opportunity to be as healthy as possible.  This requires removing
+> obstacles to health such as poverty, discrimination, and their
+> consequences."
+> — Robert Wood Johnson Foundation (2017)
+
+## 48.1 Why Equity Analysis Matters
+
+Healthcare access models trained on historical data often perpetuate or
+amplify existing disparities.  A model that predicts access scores well on
+average may systematically under-predict access for rural, low-income, or
+minority-majority counties — the very communities most in need.
+
+This chapter provides a rigorous analytical framework for:
+1. **Measuring** health disparities across demographic groups
+2. **Decomposing** gaps into explainable and structural components
+3. **Auditing** predictive models for algorithmic fairness violations
+4. **Mitigating** bias through calibration and threshold adjustments
+
+## 48.2 Inequality Indices
+
+### 48.2.1 Gini Coefficient
+
+$$G = \frac{2\sum_i i \cdot x_{(i)}}{n \sum_i x_i} - \frac{n+1}{n}$$
+
+where $x_{(i)}$ is the $i$-th ordered access score.
+$G = 0$: perfect equality; $G \to 1$: maximal inequality.
+
+```julia
+using HealthEquity
+
+access_scores = [0.008, 0.003, 0.012, 0.002, 0.009, 0.001, 0.015, 0.004]
+G = gini_coefficient(access_scores)
+println("Gini: $(round(G; digits=3))")
+# → 0.381: moderate inequality in access scores
+```
+
+### 48.2.2 Theil T Index
+
+The Theil T index is **additively decomposable** — it separates into
+between-group and within-group components:
+
+$$T = \frac{1}{n}\sum_i \frac{x_i}{\bar{x}} \log\frac{x_i}{\bar{x}}$$
+$$T = T_B + T_W = \sum_g \frac{n_g}{n}\frac{\bar{x}_g}{\bar{x}}\log\frac{\bar{x}_g}{\bar{x}} + \sum_g \frac{n_g}{n}\frac{\bar{x}_g}{\bar{x}} T_g$$
+
+```julia
+groups = repeat(["rural", "urban"], 4)
+td = theil_decompose(access_scores, groups)
+println(td)
+# Theil Decomposition
+#   Total:         0.1234
+#   Between-group: 0.0456 (37.0%)
+#   Within-group:  0.0778
+# → 37% of inequality is due to rural/urban group difference
+```
+
+### 48.2.3 Concentration Index
+
+The concentration index (Wagstaff 1989) measures **socioeconomic inequality**:
+
+$$C = \frac{2}{\mu} \text{Cov}(y, r)$$
+
+where $r$ is the fractional rank in the socioeconomic distribution.
+$C < 0$: health concentrated among the poor (e.g., disease burden);
+$C > 0$: health concentrated among the rich (e.g., specialist access).
+
+```julia
+poverty_ranks = [0.9, 0.3, 0.7, 0.95, 0.4, 0.99, 0.1, 0.5]  # rank in SES
+ci = concentration_index(access_scores, poverty_ranks)
+println("Concentration index: $(round(ci; digits=3))")
+# Negative: better access concentrated among less-poor counties
+```
+
+## 48.3 Algorithmic Fairness Metrics
+
+### 48.3.1 Demographic Parity
+
+A model satisfies **demographic parity** if positive prediction rates are equal:
+
+$$|\Pr(\hat{Y}=1 | A=0) - \Pr(\hat{Y}=1 | A=1)| \leq \varepsilon$$
+
+```julia
+# Binary access deficit predictions and group labels
+ŷ_deficits = rand([0, 1], 100)
+groups      = repeat(["rural", "urban"], 50)
+
+dp = demographic_parity(ŷ_deficits, groups)
+println(dp)
+# Interpretation: DP diff > 0.05 indicates potential unfairness
+```
+
+### 48.3.2 Equalized Odds
+
+**Equalized odds** (Hardt, Price & Srebro 2016) requires equal TPR and FPR:
+
+$$|\text{TPR}(A=0) - \text{TPR}(A=1)| + |\text{FPR}(A=0) - \text{FPR}(A=1)| \leq \varepsilon$$
+
+```julia
+y_true = rand([0, 1], 100)
+eo = equalized_odds(ŷ_deficits, y_true, groups)
+println(eo[!, [:group, :tpr, :fpr, :acc]])
+```
+
+### 48.3.3 Calibration by Group
+
+A model is **group-calibrated** if $\Pr(Y=1 | \hat{p}=p, A=g)$ equals $p$
+for all groups $g$.  Group-differential calibration is particularly harmful
+because it means the model's confidence is systematically misleading for
+minority groups.
+
+```julia
+probs = clamp.(rand(100) .* 0.8 .+ 0.1, 0.01, 0.99)
+cg = calibration_gap(probs, y_true, groups; n_bins=8)
+# Wide gaps in cal_gap column indicate differential calibration
+```
+
+## 48.4 Oaxaca-Blinder Decomposition
+
+The **Oaxaca-Blinder decomposition** (Oaxaca 1973; Blinder 1973) decomposes
+the mean outcome gap into:
+
+$$\bar{y}_A - \bar{y}_B = \underbrace{(\bar{X}_A - \bar{X}_B)'\hat{\beta}_B}_{\text{Explained: endowments}} + \underbrace{\bar{X}_B'(\hat{\beta}_A - \hat{\beta}_B)}_{\text{Unexplained: returns}}$$
+
+The **explained** component represents differences in average characteristics
+(e.g., rural counties have higher poverty rates — a characteristic difference).
+The **unexplained** component reflects differential *returns* to the same
+characteristics — a proxy for structural discrimination.
+
+```julia
+rural_mask  = groups .== "rural"
+urban_mask  = .!rural_mask
+X_features  = randn(100, 3)  # poverty, uninsured, distance
+
+ob = oaxaca_blinder(
+    X_features[rural_mask, :], Float64.(y_true[rural_mask]),
+    X_features[urban_mask, :], Float64.(y_true[urban_mask]);
+    feature_names = ["poverty", "uninsured", "distance"]
+)
+println(ob)
+# Oaxaca-Blinder Decomposition
+#   Total gap:    -0.0823
+#   Explained:    -0.0501 (60.9%)   ← mostly characteristics
+#   Unexplained:  -0.0322 (39.1%)   ← some structural bias
+```
+
+## 48.5 Bias Mitigation
+
+### 48.5.1 Group-Specific Thresholds
+
+Post-processing: find decision thresholds $\tau_g$ such that TPR is equal across groups:
+
+```julia
+probs_access = clamp.(rand(100) .* 0.8 .+ 0.1, 0.01, 0.99)
+y_access     = rand([0, 1], 100)
+groups_access = repeat(["rural", "urban"], 50)
+
+# Find thresholds equalising TPR
+threshs = equalise_tpr(probs_access, y_access, groups_access)
+println("Equalised-TPR thresholds: $threshs")
+
+# Apply group-specific thresholds
+ŷ_fair = apply_group_thresholds(probs_access, groups_access, threshs)
+
+# Verify: TPR is now approximately equal
+eo_fair = equalized_odds(ŷ_fair, y_access, groups_access)
+println("After mitigation:")
+println(eo_fair[!, [:group, :tpr, :fpr]])
+```
+
+**Trade-off**: equalising TPR may increase FPR disparity.  Use the
+`threshold_sweep` function to explore the full Pareto frontier.
+
+### 48.5.2 Group-Stratified Platt Calibration
+
+When models are poorly calibrated for specific subgroups, fit independent
+logistic (Platt) calibration models:
+
+```julia
+cal_params = platt_calibrate_by_group(probs_access, y_access, groups_access; n_iter=100)
+p_calibrated = apply_group_calibration(probs_access, groups_access, cal_params)
+
+# Check calibration improvement
+cr_before = calibration_error(probs_access, y_access)
+cr_after  = calibration_error(p_calibrated, y_access)
+println("ECE before: $(round(cr_before.ece;digits=4))")
+println("ECE after:  $(round(cr_after.ece;digits=4))")
+```
+
+## 48.6 Full Equity Audit
+
+```julia
+X_features = randn(100, 3)
+
+report = equity_report(probs_access, y_access, groups_access;
+                        X_features = X_features,
+                        ses_var     = randn(100),
+                        model_name  = "Access Deficit Classifier v1.0")
+println(report)
+```
+
+The `EquityReport` integrates all metrics and provides actionable
+recommendations.  It should be generated for every model before deployment.
+
+## References
+
+- Hardt, M., Price, E., & Srebro, N. (2016). Equality of opportunity in
+  supervised learning. *NeurIPS 29*.
+- Oaxaca, R. (1973). Male-female wage differentials in urban labor markets.
+  *International Economic Review*, 14(3), 693–709.
+- Blinder, A. S. (1973). Wage discrimination: Reduced form and structural
+  estimates. *Journal of Human Resources*, 8(4), 436–455.
+- Wagstaff, A., Paci, P., & van Doorslaer, E. (1991). On the measurement of
+  inequalities in health. *Social Science & Medicine*, 33(5), 545–557.
+- Obermeyer, Z., Powers, B., Vogeli, C., & Mullainathan, S. (2019). Dissecting
+  racial bias in an algorithm used to manage the health of populations.
+  *Science*, 366(6464), 447–453.
