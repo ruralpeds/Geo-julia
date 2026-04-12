@@ -43,7 +43,11 @@ TimeSeries = "0.23"
 
 # Machine Learning integration
 MLJ = "0.20"
+MLJLinearModels = "0.10"
+MLJEnsembles = "0.3"
+MLJBalancing = "0.2"
 Flux = "0.14"
+Statistics = "1.9"
 
 # Database
 SQLite = "1.6"
@@ -82,6 +86,9 @@ JSON3 = "1"
 TimeZones = "1"
 TimeSeries = "0.23"
 MLJ = "0.20"
+MLJLinearModels = "0.10"
+MLJEnsembles = "0.3"
+Flux = "0.14"
 SQLite = "1"
 PostgreSQL = "1"
 DocStringExtensions = "0.9"
