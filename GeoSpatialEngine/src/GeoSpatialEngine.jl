@@ -51,7 +51,16 @@ export GeoSpatialAnalysisEngine,
        list_available_sources,
        validate_geospatial_data,
        cache_data,
-       batch_analyze
+       batch_analyze,
+       # Visualization exports
+       create_web_map,
+       render_heatmap,
+       create_3d_visualization,
+       animate_timeseries,
+       export_geojson,
+       export_geotiff,
+       create_interactive_dashboard,
+       publish_results
 
 # Core components
 include("core/engine.jl")
@@ -73,15 +82,13 @@ include("sources/generic.jl")
 # Analysis modules
 include("analysis/spatial_analysis.jl")
 include("analysis/statistics.jl")
-include("analysis/modeling.jl")
+include("analysis/machine_learning.jl")
 
 # Feature extraction
 include("features/feature_extraction.jl")
-include("features/preprocessing.jl")
 
 # Visualization
-include("visualization/maps.jl")
-include("visualization/plots.jl")
+include("visualization/visualization.jl")
 
 # Workflow orchestration
 include("workflow/workflow.jl")
