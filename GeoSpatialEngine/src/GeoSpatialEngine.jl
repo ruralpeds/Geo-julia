@@ -60,7 +60,14 @@ export GeoSpatialAnalysisEngine,
        export_geojson,
        export_geotiff,
        create_interactive_dashboard,
-       publish_results
+       publish_results,
+       # REST API exports
+       start_api_server,
+       create_api_server,
+       APIServer,
+       APIRequest,
+       APIResponse,
+       AnalysisJob
 
 # Core components
 include("core/engine.jl")
@@ -89,6 +96,9 @@ include("features/feature_extraction.jl")
 
 # Visualization
 include("visualization/visualization.jl")
+
+# REST API
+include("api/rest_server.jl")
 
 # Workflow orchestration
 include("workflow/workflow.jl")
