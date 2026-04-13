@@ -27,6 +27,30 @@ services:
       retries: 3
       start_period: 5s
 
+  # GeoSpatial Web UI (Vue.js Frontend)
+  web:
+    build:
+      context: .
+      dockerfile: web-ui/Dockerfile
+    container_name: geospatial-web
+    ports:
+      - "3000:80"
+    environment:
+      VITE_API_URL: http://api:8080
+      VITE_API_TIMEOUT: 30000
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - geospatial-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
   # PostgreSQL for data persistence (optional)
   postgres:
     image: postgis/postgis:15-3.3
