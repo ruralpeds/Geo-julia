@@ -1,0 +1,48 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: geo-engine-dev
+
+bases:
+  - ../../base
+
+commonLabels:
+  environment: development
+
+commonAnnotations:
+  environment: development
+
+replicas:
+  - name: api-deployment
+    count: 1
+  - name: web-deployment
+    count: 1
+
+patchesStrategicMerge:
+  - api-patch.yaml
+  - web-patch.yaml
+
+secretGenerator:
+  - name: postgres-secret
+    behavior: replace
+    literals:
+      - POSTGRES_PASSWORD=devpass123
+  - name: redis-secret
+    behavior: replace
+    literals:
+      - REDIS_PASSWORD=devpass123
+
+configMapGenerator:
+  - name: api-config
+    behavior: merge
+    literals:
+      - ENVIRONMENT=development
+      - LOG_LEVEL=debug
+
+namePrefix: dev-
+
+images:
+  - name: api
+    newTag: develop
+  - name: web
+    newTag: develop

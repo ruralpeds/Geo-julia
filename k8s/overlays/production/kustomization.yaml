@@ -1,0 +1,51 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: geo-engine
+
+bases:
+  - ../../base
+
+commonLabels:
+  environment: production
+
+commonAnnotations:
+  environment: production
+
+replicas:
+  - name: api-deployment
+    count: 5
+  - name: web-deployment
+    count: 3
+  - name: postgres-statefulset
+    count: 1
+  - name: redis-deployment
+    count: 1
+
+patchesStrategicMerge:
+  - api-patch.yaml
+  - web-patch.yaml
+  - postgres-patch.yaml
+
+secretGenerator:
+  - name: postgres-secret
+    behavior: replace
+    literals:
+      - POSTGRES_PASSWORD=CHANGE_ME_IN_SECRETS
+  - name: redis-secret
+    behavior: replace
+    literals:
+      - REDIS_PASSWORD=CHANGE_ME_IN_SECRETS
+
+configMapGenerator:
+  - name: api-config
+    behavior: merge
+    literals:
+      - ENVIRONMENT=production
+      - LOG_LEVEL=warn
+
+images:
+  - name: api
+    newTag: latest
+  - name: web
+    newTag: latest
