@@ -36,6 +36,22 @@
           >
             Jobs ({{ appStore.activeJobs.length }})
           </button>
+          <button
+            v-if="appStore.isAuthenticated"
+            @click="appStore.setCurrentPage('settings')"
+            :class="appStore.currentPage === 'settings' ? 'border-b-2 border-white' : ''"
+            class="nav-item hover:opacity-80 transition"
+          >
+            Settings
+          </button>
+          <button
+            v-if="appStore.isAuthenticated && appStore.isAdmin"
+            @click="appStore.setCurrentPage('admin')"
+            :class="appStore.currentPage === 'admin' ? 'border-b-2 border-white' : ''"
+            class="nav-item hover:opacity-80 transition"
+          >
+            Admin
+          </button>
         </div>
 
         <!-- Right side: User & Status -->
@@ -119,6 +135,12 @@
 
         <!-- Jobs Page -->
         <JobsPage v-else-if="appStore.currentPage === 'jobs'" />
+
+        <!-- Settings Page -->
+        <SettingsPage v-else-if="appStore.currentPage === 'settings'" />
+
+        <!-- Admin Page -->
+        <AdminPage v-else-if="appStore.currentPage === 'admin'" />
       </main>
     </div>
 
@@ -153,6 +175,8 @@ import LoginPage from '@/views/LoginPage.vue'
 import DashboardPage from '@/views/DashboardPage.vue'
 import AnalysisPage from '@/views/AnalysisPage.vue'
 import JobsPage from '@/views/JobsPage.vue'
+import SettingsPage from '@/views/SettingsPage.vue'
+import AdminPage from '@/views/AdminPage.vue'
 import IngestModal from '@/components/IngestModal.vue'
 import AnalysisModal from '@/components/AnalysisModal.vue'
 import VisualizationModal from '@/components/VisualizationModal.vue'

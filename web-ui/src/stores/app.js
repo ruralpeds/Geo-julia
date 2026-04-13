@@ -16,6 +16,7 @@ export const useAppStore = defineStore('app', () => {
   // Authentication state
   const user = ref(null)
   const isAuthenticated = computed(() => !!user.value)
+  const isAdmin = computed(() => user.value?.role === 'admin')
   const token = ref(localStorage.getItem('api_token') || '')
 
   // Dataset state
@@ -48,6 +49,12 @@ export const useAppStore = defineStore('app', () => {
     try {
       loadingData.value = true
       const result = await api.login(username, password)
+
+      // Assign role based on username for demo purposes
+      if (!result.role) {
+        result.role = username === 'admin' ? 'admin' : 'analyst'
+      }
+
       user.value = result
       token.value = result.token
       addNotification('Login successful', 'success')
@@ -227,6 +234,7 @@ export const useAppStore = defineStore('app', () => {
     // State
     user,
     isAuthenticated,
+    isAdmin,
     token,
     currentDataset,
     datasets,
