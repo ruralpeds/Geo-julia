@@ -1,0 +1,16 @@
+{
+  "expo": {
+    "name": "GeoSpatial Engine",
+    "slug": "geospatial-engine",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "assetBundlePatterns": ["**/*"],
+    "ios": {
+      "supportsTabletMode": true,
+      "bundleIdentifier": "com.geospatial.engine.ios"
+    },
+    "android": {
+      "package": "com.geospatial.engine"
+    }
+  }
+}
