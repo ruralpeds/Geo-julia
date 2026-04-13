@@ -1,0 +1,313 @@
+name: GeoSpatialEngine CI/CD
+
+on:
+  push:
+    branches:
+      - main
+      - claude/geospatial-analysis-engine-KUNKN
+    paths:
+      - 'GeoSpatialEngine/**'
+      - '.github/workflows/geospatial_engine_ci.yml'
+  pull_request:
+    branches:
+      - main
+      - claude/geospatial-analysis-engine-KUNKN
+    paths:
+      - 'GeoSpatialEngine/**'
+  schedule:
+    # Run nightly tests
+    - cron: '0 2 * * *'
+  workflow_dispatch:
+
+jobs:
+  test-code:
+    name: Test Code (Julia ${{ matrix.julia-version }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      matrix:
+        julia-version: ['1.9', 'latest']
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Set up Julia
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: ${{ matrix.julia-version }}
+
+      - name: Cache Julia packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.julia
+          key: ${{ runner.os }}-julia-${{ matrix.julia-version }}-${{ hashFiles('**/Project.toml') }}
+          restore-keys: |
+            ${{ runner.os }}-julia-${{ matrix.julia-version }}-
+            ${{ runner.os }}-julia-
+
+      - name: Install dependencies
+        run: |
+          julia --project=GeoSpatialEngine -e 'using Pkg; Pkg.instantiate()'
+
+      - name: Run unit tests
+        run: |
+          julia --project=GeoSpatialEngine -e '
+          using Pkg
+          Pkg.test("GeoSpatialEngine"; coverage=true)
+          '
+
+      - name: Process test coverage
+        if: success()
+        run: |
+          julia --project=GeoSpatialEngine -e '
+          using Coverage
+          Codecov.submit(process_folder("GeoSpatialEngine/src"))
+          '
+
+      - name: Upload coverage reports
+        if: matrix.os == 'ubuntu-latest' && matrix.julia-version == 'latest'
+        uses: codecov/codecov-action@v3
+        with:
+          files: ./coverage.xml
+          flags: unittests
+          name: codecov-umbrella
+
+  integration-tests:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    needs: test-code
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Julia
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: '1.9'
+
+      - name: Cache Julia packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.julia
+          key: ${{ runner.os }}-julia-integration-${{ hashFiles('**/Project.toml') }}
+
+      - name: Install dependencies
+        run: |
+          julia --project=GeoSpatialEngine -e 'using Pkg; Pkg.instantiate()'
+
+      - name: Run integration tests
+        run: |
+          julia --project=GeoSpatialEngine -e '
+          include("GeoSpatialEngine/test/integration_tests.jl")
+          '
+        continue-on-error: true
+
+      - name: Generate integration test report
+        if: always()
+        run: |
+          julia --project=GeoSpatialEngine -e '
+          include("GeoSpatialEngine/test/integration_report.jl")
+          ' > integration_report.txt
+        continue-on-error: true
+
+      - name: Upload integration report
+        if: always()
+        uses: actions/upload-artifact@v3
+        with:
+          name: integration-report
+          path: integration_report.txt
+
+  performance-benchmarks:
+    name: Performance Benchmarks
+    runs-on: ubuntu-latest
+    needs: test-code
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Julia
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: '1.9'
+
+      - name: Cache Julia packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.julia
+          key: ${{ runner.os }}-julia-bench-${{ hashFiles('**/Project.toml') }}
+
+      - name: Install dependencies
+        run: |
+          julia --project=GeoSpatialEngine -e '
+          using Pkg
+          Pkg.instantiate()
+          Pkg.add("BenchmarkTools")
+          '
+
+      - name: Run benchmarks
+        run: |
+          julia --project=GeoSpatialEngine -e '
+          include("GeoSpatialEngine/benchmark/run_benchmarks.jl")
+          ' > benchmark_results.txt
+        continue-on-error: true
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v3
+        with:
+          name: benchmark-results
+          path: benchmark_results.txt
+
+      - name: Comment benchmark results on PR
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const fs = require('fs');
+            const results = fs.readFileSync('benchmark_results.txt', 'utf8');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: '## Performance Benchmarks\n\n```\n' + results + '\n```'
+            });
+
+  code-quality:
+    name: Code Quality & Linting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Julia
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: '1.9'
+
+      - name: Cache Julia packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.julia
+          key: ${{ runner.os }}-julia-lint-${{ hashFiles('**/Project.toml') }}
+
+      - name: Install linting tools
+        run: |
+          julia -e '
+          using Pkg
+          Pkg.add(["JuliaFormatter", "Documenter"])
+          '
+
+      - name: Check code formatting
+        run: |
+          julia -e '
+          using JuliaFormatter
+          format_path("GeoSpatialEngine/src"; verbose=true)
+          ' > format_report.txt
+        continue-on-error: true
+
+      - name: Upload formatting report
+        uses: actions/upload-artifact@v3
+        with:
+          name: code-format-report
+          path: format_report.txt
+
+  documentation:
+    name: Build Documentation
+    runs-on: ubuntu-latest
+    needs: code-quality
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Julia
+        uses: julia-actions/setup-julia@v1
+        with:
+          version: '1.9'
+
+      - name: Cache Julia packages
+        uses: actions/cache@v3
+        with:
+          path: ~/.julia
+          key: ${{ runner.os }}-julia-docs-${{ hashFiles('**/Project.toml') }}
+
+      - name: Install dependencies
+        run: |
+          julia --project=GeoSpatialEngine -e '
+          using Pkg
+          Pkg.instantiate()
+          Pkg.add("Documenter")
+          '
+
+      - name: Build documentation
+        run: |
+          julia --project=GeoSpatialEngine docs/make.jl
+        continue-on-error: true
+
+      - name: Upload documentation
+        uses: actions/upload-artifact@v3
+        with:
+          name: documentation
+          path: docs/build
+
+      - name: Deploy documentation
+        if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+        uses: peaceiris/actions-gh-pages@v3
+        with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
+          publish_dir: ./docs/build
+        continue-on-error: true
+
+  build-status:
+    name: Build Status Check
+    runs-on: ubuntu-latest
+    needs: [test-code, integration-tests, performance-benchmarks, code-quality, documentation]
+    if: always()
+    steps:
+      - name: Check build status
+        run: |
+          if [ "${{ needs.test-code.result }}" = "failure" ] || \
+             [ "${{ needs.code-quality.result }}" = "failure" ]; then
+            echo "❌ Build FAILED"
+            exit 1
+          else
+            echo "✅ Build PASSED"
+          fi
+
+      - name: Create status badge
+        run: |
+          if [ "${{ needs.test-code.result }}" = "success" ]; then
+            BADGE="passing"
+            COLOR="green"
+          else
+            BADGE="failing"
+            COLOR="red"
+          fi
+          echo "BADGE=$BADGE" >> $GITHUB_ENV
+          echo "COLOR=$COLOR" >> $GITHUB_ENV
+
+      - name: Report summary
+        if: always()
+        run: |
+          echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- Unit Tests: ${{ needs.test-code.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Integration Tests: ${{ needs.integration-tests.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Benchmarks: ${{ needs.performance-benchmarks.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Code Quality: ${{ needs.code-quality.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- Documentation: ${{ needs.documentation.result }}" >> $GITHUB_STEP_SUMMARY
+
+  notify-status:
+    name: Notify Build Status
+    runs-on: ubuntu-latest
+    needs: build-status
+    if: always() && (github.event_name == 'push' || github.event_name == 'pull_request')
+    steps:
+      - name: Comment status on PR
+        if: github.event_name == 'pull_request'
+        uses: actions/github-script@v6
+        with:
+          script: |
+            const conclusion = '${{ needs.build-status.result }}' === 'success' ? '✅ PASSED' : '❌ FAILED';
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body: `## Build Status: ${conclusion}\n\n[View Details](${context.payload.pull_request.html_url}/checks)`
+            });
+        continue-on-error: true

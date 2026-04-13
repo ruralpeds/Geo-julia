@@ -1,0 +1,119 @@
+version: '3.8'
+
+services:
+  # GeoSpatial Analysis Engine API
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: geospatial-api
+    ports:
+      - "8080:8080"
+    environment:
+      HOST: 0.0.0.0
+      PORT: 8080
+      JULIA_NUM_THREADS: 4
+      JULIA_OPTIMIZE: 2
+    volumes:
+      - ./data:/app/data
+      - ./results:/app/results
+    networks:
+      - geospatial-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # GeoSpatial Web UI (Vue.js Frontend)
+  web:
+    build:
+      context: .
+      dockerfile: web-ui/Dockerfile
+    container_name: geospatial-web
+    ports:
+      - "3000:80"
+    environment:
+      VITE_API_URL: http://api:8080
+      VITE_API_TIMEOUT: 30000
+    depends_on:
+      api:
+        condition: service_healthy
+    networks:
+      - geospatial-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 5s
+
+  # PostgreSQL for data persistence (optional)
+  postgres:
+    image: postgis/postgis:15-3.3
+    container_name: geospatial-db
+    environment:
+      POSTGRES_DB: geospatial
+      POSTGRES_USER: geoadmin
+      POSTGRES_PASSWORD: geoadmin123
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - geospatial-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U geoadmin"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for caching and job queue (optional)
+  redis:
+    image: redis:7-alpine
+    container_name: geospatial-cache
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - geospatial-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+
+  # Nginx reverse proxy (optional)
+  nginx:
+    image: nginx:alpine
+    container_name: geospatial-proxy
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./ssl:/etc/nginx/ssl:ro
+    depends_on:
+      - api
+    networks:
+      - geospatial-network
+    restart: unless-stopped
+
+volumes:
+  postgres_data:
+  redis_data:
+
+networks:
+  geospatial-network:
+    driver: bridge
+
+# Usage:
+# docker-compose up -d              # Start all services
+# docker-compose down               # Stop all services
+# docker-compose logs -f api        # View API logs
+# docker-compose ps                 # Show running services
+# docker-compose exec api julia ... # Execute commands in container

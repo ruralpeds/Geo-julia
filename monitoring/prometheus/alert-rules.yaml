@@ -1,0 +1,133 @@
+groups:
+  - name: geo-engine
+    interval: 30s
+    rules:
+      # API Availability
+      - alert: APIDown
+        expr: up{job="geo-api"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "API is down"
+          description: "API service has been unavailable for 1 minute"
+
+      # High API Error Rate
+      - alert: HighAPIErrorRate
+        expr: rate(api_http_requests_total{status=~"5.."}[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API error rate"
+          description: "API error rate is {{ $value | humanizePercentage }}"
+
+      # High API Response Time
+      - alert: HighAPIResponseTime
+        expr: histogram_quantile(0.95, rate(api_http_request_duration_seconds_bucket[5m])) > 1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High API response time"
+          description: "95th percentile response time is {{ $value }}s"
+
+      # Database Connection Issues
+      - alert: PostgreSQLDown
+        expr: up{job="postgres"} == 0
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "PostgreSQL is down"
+          description: "PostgreSQL database is unavailable"
+
+      # High Database Connections
+      - alert: HighDatabaseConnections
+        expr: pg_stat_activity_count > 80
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High database connection count"
+          description: "Database connection count is {{ $value }}"
+
+      # Database Replication Lag
+      - alert: DatabaseReplicationLag
+        expr: pg_replication_lag_bytes > 1073741824  # 1GB
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Database replication lag"
+          description: "Replication lag is {{ $value | humanize }}B"
+
+      # Redis Issues
+      - alert: RedisDown
+        expr: up{job="redis"} == 0
+        for: 1m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Redis is down"
+          description: "Redis cache is unavailable"
+
+      # Low Redis Memory
+      - alert: LowRedisMemory
+        expr: redis_memory_used_bytes / redis_memory_max_bytes > 0.9
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low Redis memory"
+          description: "Redis memory usage is {{ $value | humanizePercentage }}"
+
+      # High Node CPU
+      - alert: HighNodeCPU
+        expr: rate(node_cpu_seconds_total{mode!="idle"}[5m]) > 0.8
+        for: 10m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High CPU usage on node {{ $labels.node }}"
+          description: "CPU usage is {{ $value | humanizePercentage }}"
+
+      # High Node Memory
+      - alert: HighNodeMemory
+        expr: (1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)) > 0.85
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High memory usage on node {{ $labels.node }}"
+          description: "Memory usage is {{ $value | humanizePercentage }}"
+
+      # Disk Space Low
+      - alert: LowDiskSpace
+        expr: (node_filesystem_avail_bytes{device!~'tmpfs'} / node_filesystem_size_bytes) < 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Low disk space on {{ $labels.device }}"
+          description: "Available space is {{ $value | humanizePercentage }}"
+
+      # Pod Restart Loop
+      - alert: PodRestartingFrequently
+        expr: rate(kube_pod_container_status_restarts_total[15m]) > 0.5
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "Pod {{ $labels.pod }} restarting frequently"
+          description: "Pod restart rate is {{ $value }} restarts/min"
+
+      # Job Failure Rate High
+      - alert: HighJobFailureRate
+        expr: rate(job_failures_total[5m]) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "High job failure rate"
+          description: "Job failure rate is {{ $value | humanizePercentage }}"

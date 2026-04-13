@@ -1,0 +1,80 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: geo-engine
+
+commonLabels:
+  app: geospatial-engine
+  version: v1
+
+commonAnnotations:
+  managed-by: kustomize
+  environment: kubernetes
+
+resources:
+  - namespace.yaml
+  - postgres-configmap.yaml
+  - postgres-secret.yaml
+  - postgres-statefulset.yaml
+  - postgres-service.yaml
+  - redis-configmap.yaml
+  - redis-secret.yaml
+  - redis-deployment.yaml
+  - redis-service.yaml
+  - api-configmap.yaml
+  - api-secret.yaml
+  - api-deployment.yaml
+  - api-service.yaml
+  - web-configmap.yaml
+  - web-deployment.yaml
+  - web-service.yaml
+  - ingress.yaml
+
+replicas:
+  - name: api-deployment
+    count: 3
+  - name: web-deployment
+    count: 2
+  - name: redis-deployment
+    count: 1
+  - name: postgres-statefulset
+    count: 1
+
+configMapGenerator:
+  - name: app-config
+    literals:
+      - LOG_LEVEL=info
+      - ENVIRONMENT=production
+
+secretGenerator:
+  - name: app-secrets
+    type: Opaque
+    behavior: create
+
+patchesStrategicMerge:
+  - api-patch.yaml
+  - web-patch.yaml
+
+images:
+  - name: api
+    newTag: latest
+    newName: ghcr.io/timothyhartzog/geo-julia-api
+  - name: web
+    newTag: latest
+    newName: ghcr.io/timothyhartzog/geo-julia-web
+
+vars:
+  - name: POSTGRES_HOST
+    objref:
+      kind: Service
+      name: postgres
+      apiVersion: v1
+    fieldref:
+      fieldpath: metadata.name
+  - name: REDIS_HOST
+    objref:
+      kind: Service
+      name: redis
+      apiVersion: v1
+    fieldref:
+      fieldpath: metadata.name
