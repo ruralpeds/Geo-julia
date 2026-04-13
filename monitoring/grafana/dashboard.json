@@ -1,0 +1,66 @@
+{
+  "dashboard": {
+    "title": "GeoSpatial Analysis Engine",
+    "description": "Complete monitoring dashboard",
+    "timezone": "utc",
+    "refresh": "30s",
+    "schemaVersion": 38,
+    "version": 1,
+    "panels": [
+      {
+        "title": "API Requests Rate",
+        "targets": [
+          {
+            "expr": "rate(api_http_requests_total[5m])"
+          }
+        ],
+        "type": "graph"
+      },
+      {
+        "title": "API Response Time (p95)",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.95, rate(api_http_request_duration_seconds_bucket[5m]))"
+          }
+        ],
+        "type": "graph"
+      },
+      {
+        "title": "Database Connections",
+        "targets": [
+          {
+            "expr": "pg_stat_activity_count"
+          }
+        ],
+        "type": "gauge"
+      },
+      {
+        "title": "Redis Memory Usage",
+        "targets": [
+          {
+            "expr": "redis_memory_used_bytes / redis_memory_max_bytes"
+          }
+        ],
+        "type": "gauge"
+      },
+      {
+        "title": "Node CPU Usage",
+        "targets": [
+          {
+            "expr": "rate(node_cpu_seconds_total{mode!='idle'}[5m])"
+          }
+        ],
+        "type": "graph"
+      },
+      {
+        "title": "Node Memory Usage",
+        "targets": [
+          {
+            "expr": "1 - (node_memory_MemAvailable_bytes / node_memory_MemTotal_bytes)"
+          }
+        ],
+        "type": "gauge"
+      }
+    ]
+  }
+}
