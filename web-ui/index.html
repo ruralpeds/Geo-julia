@@ -2,13 +2,28 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <link rel="icon" href="/favicon.svg" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#2563eb" />
+    <meta name="description" content="GeoSpatial Analysis Engine - Advanced spatial analysis and visualization platform" />
+
+    <link rel="icon" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+
     <title>GeoSpatial Analysis Engine</title>
-    <script src="https://cdn.tailwindcss.com"></script>
+
+    <!-- Preconnect to external resources -->
+    <link rel="preconnect" href="https://tile.openstreetmap.org" crossorigin />
+
+    <!-- DNS prefetch for API -->
+    <link rel="dns-prefetch" href="//localhost:8080" />
   </head>
   <body>
+    <noscript>
+      <p>This application requires JavaScript to be enabled. Please enable JavaScript in your browser settings.</p>
+    </noscript>
+
     <div id="app"></div>
+
     <script type="module" src="/src/main.js"></script>
   </body>
 </html>
