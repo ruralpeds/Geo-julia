@@ -1,0 +1,47 @@
+name: Repo Hygiene
+
+on:
+  schedule:
+    - cron: '0 6 * * *'   # 06:00 UTC daily
+  workflow_dispatch:       # allow manual runs from the Actions tab
+
+permissions:
+  issues: write
+  pull-requests: write
+  contents: write
+
+jobs:
+  stale:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/stale@v9
+        with:
+          # --- Pull Request policy ---
+          days-before-pr-stale: 45
+          days-before-pr-close: 14
+          stale-pr-label: stale
+          stale-pr-message: |
+            This PR has had no activity for 45 days and is being marked stale.
+            It will auto-close in 14 days unless there is new activity or one
+            of the `keep`, `pinned`, `in-progress`, or `security` labels is applied.
+          close-pr-message: |
+            Closing as stale. Reopen anytime if you want to pick it back up.
+          exempt-pr-labels: 'keep,pinned,in-progress,security'
+          delete-branch: true
+
+          # --- Issue policy (gentler than PRs) ---
+          days-before-issue-stale: 90
+          days-before-issue-close: 30
+          stale-issue-label: stale
+          stale-issue-message: |
+            This issue has had no activity for 90 days and is being marked stale.
+            It will auto-close in 30 days unless there is new activity or one
+            of the `keep`, `pinned`, `bug`, or `security` labels is applied.
+          close-issue-message: |
+            Closing as stale. Reopen anytime.
+          exempt-issue-labels: 'keep,pinned,bug,security'
+
+          # --- Safety rails ---
+          operations-per-run: 100
+          remove-stale-when-updated: true
+          ascending: true
