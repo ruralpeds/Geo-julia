@@ -5,19 +5,19 @@ version = "0.1.0"
 
 [deps]
 CSV = "336ed68f-0bac-5ca0-87d4-7b16caf5d00b"
-DataFrames = "a93c6f00-e57d-5684-b466-afe8fa294f38"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 HTTP = "cd3eb016-35fb-5094-929b-558a96fad6f3"
-JSON3 = "0f8b85d8-7e73-4b43-9b55-9f098e12d50e"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
 
 [compat]
-julia = "1.10"
+julia = "1.12"
 CSV = "0.10"
 DataFrames = "1"
 HTTP = "1"
 JSON3 = "1"
 
 [extras]
-Test = "8dfed614-e22c-358e-b159-9f75977ba353"
+Test = "8dfed614-e22c-5e08-85e1-65c5234f0b40"
 
 [targets]
-test = ["Test"]
+test = ["Test", "DataFrames"]

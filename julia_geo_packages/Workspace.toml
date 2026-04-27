@@ -1,10 +1,17 @@
-# Vol 3: Production Julia Geospatial Packages
+# Vol 3 + Migration: Production Julia Geospatial Packages
 # Julia General Registry-quality packages for the geospatial health analytics ecosystem.
+# Migrated from ruralpeds/rural-hospital-modeling-julia-master — April 2026
 
 [workspace]
 packages = [
-    "packages/SpatialStats",
     "packages/Geocode",
+    "packages/GeostatHealth",
+    "packages/Geostatistics",
+    "packages/HealthcareGeo",
     "packages/MapClassify",
     "packages/Overpass",
+    "packages/PointPatterns",
+    "packages/Raster",
+    "packages/SpatialRegression",
+    "packages/SpatialStats",
 ]

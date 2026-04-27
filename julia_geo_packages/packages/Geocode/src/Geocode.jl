@@ -17,7 +17,6 @@ using HTTP
 using JSON3
 using CSV
 using DataFrames
-using Dates
 
 # ── Type exports ─────────────────────────────────────────────────────────────
 export GeocodedAddress, GeocoderBackend
@@ -411,29 +410,30 @@ Normalise a street address for geocoding:
 """
 function normalize_address(addr::String)::String
     s = strip(addr)
-    # Expand common abbreviations
+    # Expand common abbreviations. Patterns use a lookahead (?=\W|$) so they
+    # consume the optional trailing period and stop at a non-word character.
     replacements = [
-        r"\bSt\.?\b"i   => "Street",
-        r"\bAve\.?\b"i  => "Avenue",
-        r"\bBlvd\.?\b"i => "Boulevard",
-        r"\bDr\.?\b"i   => "Drive",
-        r"\bRd\.?\b"i   => "Road",
-        r"\bLn\.?\b"i   => "Lane",
-        r"\bCt\.?\b"i   => "Court",
-        r"\bPl\.?\b"i   => "Place",
-        r"\bHwy\.?\b"i  => "Highway",
-        r"\bPkwy\.?\b"i => "Parkway",
-        r"\bN\.?\b"i    => "North",
-        r"\bS\.?\b"i    => "South",
-        r"\bE\.?\b"i    => "East",
-        r"\bW\.?\b"i    => "West",
-        r"\bNE\b"i      => "Northeast",
-        r"\bNW\b"i      => "Northwest",
-        r"\bSE\b"i      => "Southeast",
-        r"\bSW\b"i      => "Southwest",
-        r"\bApt\.?\s*"i => "Apt ",
-        r"\bSte\.?\s*"i => "Suite ",
-        r"\s+"          => " ",
+        r"\bSt\.?(?=\W|$)"i   => "Street",
+        r"\bAve\.?(?=\W|$)"i  => "Avenue",
+        r"\bBlvd\.?(?=\W|$)"i => "Boulevard",
+        r"\bDr\.?(?=\W|$)"i   => "Drive",
+        r"\bRd\.?(?=\W|$)"i   => "Road",
+        r"\bLn\.?(?=\W|$)"i   => "Lane",
+        r"\bCt\.?(?=\W|$)"i   => "Court",
+        r"\bPl\.?(?=\W|$)"i   => "Place",
+        r"\bHwy\.?(?=\W|$)"i  => "Highway",
+        r"\bPkwy\.?(?=\W|$)"i => "Parkway",
+        r"\bN\.?(?=\W|$)"i    => "North",
+        r"\bS\.?(?=\W|$)"i    => "South",
+        r"\bE\.?(?=\W|$)"i    => "East",
+        r"\bW\.?(?=\W|$)"i    => "West",
+        r"\bNE\b"i             => "Northeast",
+        r"\bNW\b"i             => "Northwest",
+        r"\bSE\b"i             => "Southeast",
+        r"\bSW\b"i             => "Southwest",
+        r"\bApt\.?\s*"i        => "Apt ",
+        r"\bSte\.?\s*"i        => "Suite ",
+        r"\s+"                 => " ",
     ]
     for (pattern, replacement) in replacements
         s = replace(s, pattern => replacement)
