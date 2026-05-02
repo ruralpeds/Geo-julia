@@ -106,3 +106,20 @@ reason. Retain for institutional memory.
 - Suggestions queue (proposed gaps awaiting triage): [`SUGGESTIONS.md`](./SUGGESTIONS.md).
 - Auto-generated index: [`status.json`](./status.json).
 - Append-only event log: [`build-ledger.jsonl`](./build-ledger.jsonl) (workflow-owned; do not edit).
+
+---
+
+## Legacy Gap Analysis — Pending Review
+
+⚠️ **ACTION REQUIRED:** This repo has a legacy gap analysis document that needs consolidation.
+
+**Legacy file:** `GAP_ANALYSIS.md`
+**Status:** Archived to `.gap-analysis/archive/GAP_ANALYSIS.md.archived`
+**Next steps:**
+1. Review `.gap-analysis/archive/GAP_ANALYSIS.md.archived`
+2. Extract key gaps and create proper GAP-NNN entries above
+3. Use the format from schema.md for consistency
+4. Delete this section once complete
+
+---
+
