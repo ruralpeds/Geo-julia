@@ -143,7 +143,7 @@ function _byar_lower(o::Real, e::Real)
     o_f = Float64(o); e_f = max(Float64(e), 1e-12)
     # For small counts, use exact Poisson quantile
     if o_f < 20
-        lo = dist_quantile(Poisson(o_f), 0.025)
+        lo = Distributions.quantile(Distributions.Poisson(o_f), 0.025)
         return lo / e_f
     end
     (o_f * (1 - 1/(9o_f) - 1.645/sqrt(o_f))^3) / e_f
@@ -151,7 +151,7 @@ end
 function _byar_upper(o::Real, e::Real)
     o_f = Float64(o); e_f = max(Float64(e), 1e-12)
     if o_f < 20
-        hi = dist_quantile(Poisson(o_f + 1), 0.975)
+        hi = Distributions.quantile(Distributions.Poisson(o_f + 1), 0.975)
         return hi / e_f
     end
     ((o_f+1) * (1 - 1/(9*(o_f+1)) + 1.645/sqrt(o_f+1))^3) / e_f

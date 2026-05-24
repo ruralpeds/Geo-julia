@@ -14,6 +14,8 @@ Provides pure-Julia implementations of:
 module SpatialRegression
 
 using LinearAlgebra, Statistics, Random, DataFrames
+import Distances
+import Optim
 
 include("gwr.jl")
 include("spatial_lag.jl")

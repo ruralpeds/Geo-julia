@@ -17,6 +17,8 @@ All methods provide finite-sample marginal coverage guarantees:
 module ConformalHealth
 
 using Statistics, LinearAlgebra, Random, DataFrames
+import StatsBase
+import Distributions
 
 include("split_conformal.jl")
 include("jackknife.jl")

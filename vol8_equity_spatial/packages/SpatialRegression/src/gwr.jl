@@ -4,6 +4,8 @@
 # Fotheringham, Brunsdon & Charlton (1996, 2002)
 # Local regression: β_i = (X'W_i X)⁻¹X'W_i y
 # where W_i = diag(K(d(u_i, u_j)/b)) for kernel K and bandwidth b
+#
+# Uses Distances.jl for distance computation and Optim.jl for bandwidth selection.
 
 # ── Kernel functions ──────────────────────────────────────────────────────────
 
@@ -43,39 +45,31 @@ const KERNELS = Dict(
     :epanechnikov => epanechnikov_kernel,
 )
 
-# ── Distance matrix ───────────────────────────────────────────────────────────
-
-"""
-    haversine_dist_km(lat1, lon1, lat2, lon2) -> Float64
-
-Great-circle distance in km using the Haversine formula.
-"""
-function haversine_dist_km(lat1, lon1, lat2, lon2)
-    R = 6371.0   # Earth radius in km
-    φ1, φ2 = deg2rad(lat1), deg2rad(lat2)
-    Δφ = deg2rad(lat2 - lat1)
-    Δλ = deg2rad(lon2 - lon1)
-    a = sin(Δφ/2)^2 + cos(φ1)*cos(φ2)*sin(Δλ/2)^2
-    2R * asin(sqrt(a))
-end
+# ── Distance matrix using Distances.jl ───────────────────────────────────────
 
 """
     distance_matrix(coords; metric) -> Matrix{Float64}
 
 Compute n×n distance matrix from coordinates (n × 2 matrix of [lat, lon]).
+Uses Distances.jl for computation.
 """
 function distance_matrix(coords::AbstractMatrix; metric::Symbol=:euclidean)
     n = size(coords, 1)
-    D = zeros(n, n)
-    for i in 1:n, j in (i+1):n
-        d = if metric == :haversine
-            haversine_dist_km(coords[i,1], coords[i,2], coords[j,1], coords[j,2])
-        else
-            sqrt(sum((coords[i,:] .- coords[j,:]).^2))
+    if metric == :haversine
+        # Use Distances.jl Haversine metric (expects (lat, lon) in radians)
+        D = zeros(n, n)
+        hav = Distances.Haversine(6371.0)  # Earth radius in km
+        for i in 1:n, j in (i+1):n
+            a = [deg2rad(coords[i,1]), deg2rad(coords[i,2])]
+            b = [deg2rad(coords[j,1]), deg2rad(coords[j,2])]
+            d = Distances.evaluate(hav, a, b)
+            D[i,j] = D[j,i] = d
         end
-        D[i,j] = D[j,i] = d
+        return D
+    else
+        # Euclidean distance via Distances.jl pairwise
+        return Distances.pairwise(Distances.Euclidean(), coords', coords')
     end
-    D
 end
 
 # ── GWR model ─────────────────────────────────────────────────────────────────
@@ -124,7 +118,7 @@ function gwr_fit(
         feature_names = ["intercept"; feature_names]
     end
 
-    # Auto-select bandwidth via AIC-c minimisation
+    # Auto-select bandwidth via AIC-c minimisation using Optim.jl
     if bandwidth < 0
         bandwidth = bandwidth_aic(y, X, coords; kernel=kernel, metric=metric)
     end
@@ -180,7 +174,6 @@ function gwr_fit(
     σ² = mean(residuals.^2)
 
     # AIC-c: Akaike-corrected for GWR bandwidth selection
-    # tr(H): hat matrix trace ≈ effective number of parameters
     aic_c = n * log(σ²) + n * (n + k) / (n - k - 2)
 
     GWRModel(Matrix(coords), bandwidth, kernel, n, p,
@@ -191,7 +184,7 @@ end
 """
     bandwidth_aic(y, X, coords; kernel, metric, candidates) -> Float64
 
-Golden-section + coarse grid search for optimal GWR bandwidth via AIC-c.
+Optimise GWR bandwidth via AIC-c using Optim.jl Brent's method on log-bandwidth.
 """
 function bandwidth_aic(
     y      :: AbstractVector,
@@ -206,17 +199,14 @@ function bandwidth_aic(
     max_d = maximum(D)
     min_d = max_d / (n * 2)
 
-    # Coarse search over log-spaced bandwidth candidates
-    candidates = exp.(range(log(min_d), log(max_d); length=n_candidates))
-    kern_fn    = get(KERNELS, kernel, gaussian_kernel)
-    X_aug      = hcat(ones(n), X); k = size(X_aug, 2)
+    kern_fn = get(KERNELS, kernel, gaussian_kernel)
+    X_aug   = hcat(ones(n), X); k = size(X_aug, 2)
 
-    best_b = candidates[1]; best_aic = Inf
-
-    for b in candidates
+    # AIC-c as a function of log-bandwidth
+    function aic_objective(log_b)
+        b = exp(log_b)
         fitted = zeros(n)
         trH    = 0.0
-        valid  = true
 
         for i in 1:n
             w_i  = [kern_fn(D[i,j], b) for j in 1:n]
@@ -227,26 +217,21 @@ function bandwidth_aic(
             try
                 β_i = XtWX \ XtWy
                 fitted[i] = dot(X_aug[i, :], β_i)
-                # Hat matrix diagonal: h_ii = x_i'(X'W_i X)⁻¹ x_i w_ii
                 h_ii = dot(X_aug[i, :], (XtWX \ X_aug[i, :]))
                 trH += h_ii * w_i[i]
             catch
-                valid = false; break
+                return Inf
             end
         end
 
-        !valid && continue
         σ² = mean((y .- fitted).^2)
-        σ² < 1e-12 && continue
-        aic_c = n * log(σ²) + n * (n + trH) / max(n - trH - 2, 1.0)
-
-        if aic_c < best_aic
-            best_aic = aic_c
-            best_b   = b
-        end
+        σ² < 1e-12 && return Inf
+        n * log(σ²) + n * (n + trH) / max(n - trH - 2, 1.0)
     end
 
-    best_b
+    # Use Optim.jl Brent's method on log-bandwidth interval
+    result = Optim.optimize(aic_objective, log(min_d), log(max_d), Optim.Brent())
+    exp(Optim.minimizer(result))
 end
 
 """
@@ -260,7 +245,7 @@ function gwr_predict(model::GWRModel, X_new::AbstractMatrix, coords_new::Abstrac
 
     for i in 1:n_new
         # Distances from new point to all training locations
-        dists = [distance_matrix(vcat(coords_new[i:i,:], model.coords[j:j,:]); metric=:euclidean)[1,2]
+        dists = [sqrt(sum((coords_new[i,:] .- model.coords[j,:]).^2))
                  for j in 1:model.n]
         # IDW weights for coefficient interpolation
         idw_w = 1 ./ max.(dists, 1e-8).^2

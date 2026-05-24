@@ -76,25 +76,10 @@ function spatial_error_fit(
         log_det - n/2 * log(σ²_λ)
     end
 
-    # Golden section search over λ ∈ (-0.99, 0.99)
-    λ_lo, λ_hi = -0.99, 0.99
-    φ = (sqrt(5) - 1) / 2
-    converged = false
-
-    for _ in 1:max_iter
-        λ1 = λ_hi - φ * (λ_hi - λ_lo)
-        λ2 = λ_lo + φ * (λ_hi - λ_lo)
-        if log_lik_spatial_error(λ1) < log_lik_spatial_error(λ2)
-            λ_lo = λ1
-        else
-            λ_hi = λ2
-        end
-        if λ_hi - λ_lo < tol
-            converged = true; break
-        end
-    end
-
-    λ_opt  = (λ_lo + λ_hi) / 2
+    # Optimise λ ∈ (-0.99, 0.99) using Optim.jl Brent's method
+    result = Optim.optimize(λ -> -log_lik_spatial_error(λ), -0.99, 0.99, Optim.Brent())
+    converged = Optim.converged(result)
+    λ_opt = Optim.minimizer(result)
     A_opt  = I(n) .- λ_opt .* W
     y_star = A_opt * y
     X_star = A_opt * X_aug

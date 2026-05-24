@@ -86,27 +86,11 @@ function spatial_lag_fit(
         log_det - n/2 * log(σ²_ρ)
     end
 
-    # Golden section search over ρ ∈ (-0.99, 0.99)
-    ρ_lo, ρ_hi = -0.99, 0.99
-    φ = (sqrt(5) - 1) / 2  # golden ratio
-    converged = false
-
-    for _ in 1:max_iter
-        ρ1 = ρ_hi - φ * (ρ_hi - ρ_lo)
-        ρ2 = ρ_lo + φ * (ρ_hi - ρ_lo)
-        ll1 = log_lik_concentrated(ρ1)
-        ll2 = log_lik_concentrated(ρ2)
-        if ll1 < ll2
-            ρ_lo = ρ1
-        else
-            ρ_hi = ρ2
-        end
-        if ρ_hi - ρ_lo < tol
-            converged = true; break
-        end
-    end
-
-    ρ_opt = (ρ_lo + ρ_hi) / 2
+    # Optimise ρ ∈ (-0.99, 0.99) using Optim.jl Brent's method
+    # Minimise negative concentrated log-likelihood
+    result = Optim.optimize(ρ -> -log_lik_concentrated(ρ), -0.99, 0.99, Optim.Brent())
+    converged = Optim.converged(result)
+    ρ_opt = Optim.minimizer(result)
     y_star = y .- ρ_opt .* Wy
     β_opt  = XtXinv * (X_aug' * y_star)
     e_opt  = y_star .- X_aug * β_opt
