@@ -15,6 +15,7 @@ Chapter 35 — Julia Healthcare GIS Textbook, Vol 5.
 module HealthcareML
 
 using DataFrames, Statistics, LinearAlgebra, Random, StatsBase, Distributions, Tables
+import DecisionTree
 
 export AccessModel, fit!, predict, predict_proba
 export DecisionTreeAccess, RandomForestAccess, GradientBoostAccess, RidgeAccess
