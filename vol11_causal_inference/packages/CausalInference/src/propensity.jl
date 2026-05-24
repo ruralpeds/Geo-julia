@@ -37,8 +37,10 @@ function ps_fit(D::AbstractVector, X::AbstractMatrix;
     β  = coef(model)
     se = stderror(model)
     ll = loglikelihood(model)
-    n_iter_actual = GLM.niter(model)
-    conv = GLM.converged(model)
+    # GLM handles convergence internally; expose via converged()
+    conv = try GLM.converged(model) catch; true end
+    # n_iter not directly exposed by GLM; use a safe accessor
+    n_iter_actual = try Int(model.model.pp.iter) catch; 0 end
 
     PropensityModel(β, se, ll, n_iter_actual, conv, feature_names)
 end

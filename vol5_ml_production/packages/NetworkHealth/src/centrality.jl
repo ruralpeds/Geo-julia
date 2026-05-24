@@ -1,5 +1,7 @@
 # centrality.jl — Network centrality measures for provider analysis
 # Chapter 36.2
+#
+# Uses Graphs.jl centrality functions where applicable.
 
 """
     degree_centrality(g; direction=:out, normalize=true) -> Vector{Float64}
@@ -19,39 +21,23 @@ end
 """
     betweenness_centrality(g; normalize=true) -> Vector{Float64}
 
-Brandes (2001) algorithm for betweenness centrality.
+Betweenness centrality using Graphs.jl's efficient Brandes (2001) implementation.
 Counts fraction of shortest paths passing through each node.
-
-O(VE) for unweighted; O(VE + V²log V) for weighted (Dijkstra).
 """
 function betweenness_centrality(g::ReferralNetwork; normalize::Bool = true)
-    n  = g.n
-    bc = zeros(n)
-
-    for s in 1:n
-        # BFS/Dijkstra from source s
-        dist, sigma, pred = _bfs_single_source(g, s)
-
-        # Accumulate pair dependencies
-        delta = zeros(n)
-        order = sortperm(dist; rev=true)  # process in reverse BFS order
-        for w in order
-            dist[w] == Inf && continue
-            for v in pred[w]
-                coeff = (sigma[v] / sigma[w]) * (1.0 + delta[w])
-                delta[v] += coeff
-            end
-            w != s && (bc[w] += delta[w])
+    # Use Graphs.jl betweenness_centrality on the underlying graph
+    # Build a simple digraph (unweighted) for BFS-based betweenness
+    dg = Graphs.SimpleDiGraph(g.n)
+    for i in 1:g.n
+        for j in g.adj[i, :].nzind
+            Graphs.add_edge!(dg, i, j)
         end
     end
-
-    if normalize && n > 2
-        denom = g.directed ? Float64((n-1)*(n-2)) : Float64((n-1)*(n-2)/2)
-        bc ./= denom
-    end
+    bc = Graphs.betweenness_centrality(dg; normalize=normalize)
     bc
 end
 
+# BFS helper still needed by flow.jl and access_metrics.jl
 function _bfs_single_source(g::ReferralNetwork, s::Int)
     n    = g.n
     dist = fill(Inf, n)
@@ -82,21 +68,17 @@ end
 """
     closeness_centrality(g; normalize=true) -> Vector{Float64}
 
-Closeness centrality: reciprocal of mean shortest path length.
-Normalised by reachable fraction for disconnected graphs.
+Closeness centrality using Graphs.jl.
 """
 function closeness_centrality(g::ReferralNetwork; normalize::Bool = true)
-    n  = g.n
-    cc = zeros(n)
-    for s in 1:n
-        dist, _, _ = _bfs_single_source(g, s)
-        reachable   = count(d -> d < Inf && d > 0, dist)
-        reachable == 0 && continue
-        total_dist   = sum(d for d in dist if d < Inf && d > 0)
-        raw          = reachable / max(total_dist, 1.0)
-        cc[s]        = normalize ? raw * (reachable / (n-1)) : raw
+    # Build simple digraph
+    dg = Graphs.SimpleDiGraph(g.n)
+    for i in 1:g.n
+        for j in g.adj[i, :].nzind
+            Graphs.add_edge!(dg, i, j)
+        end
     end
-    cc
+    Graphs.closeness_centrality(dg; normalize=normalize)
 end
 
 """
@@ -127,33 +109,19 @@ end
 """
     pagerank(g; α=0.85, max_iter=100, tol=1e-9) -> Vector{Float64}
 
-Page & Brin (1999) PageRank with damping factor α.
+Page & Brin (1999) PageRank using Graphs.jl.
 Adapted for provider referral networks: high rank = frequently reached provider.
-
-Transition matrix: M = α·D⁻¹A + (1-α)/n · 1·1'
-where D = out-degree diagonal.
 """
 function pagerank(g::ReferralNetwork;
                   α       ::Float64 = 0.85,
                   max_iter::Int     = 100,
                   tol     ::Float64 = 1e-9)
-    n   = g.n
-    A   = g.adj
-    out = vec(sum(A; dims=2))
-    # Row-normalise (stochastic matrix)
-    D_inv = spdiagm(0 => [d > 0 ? 1/d : 0.0 for d in out])
-    M     = D_inv * A
-
-    r = ones(n) ./ n
-    dangling = findall(out .== 0)
-
-    for _ in 1:max_iter
-        # Handle dangling nodes: distribute their mass uniformly
-        dangling_contrib = isempty(dangling) ? 0.0 : α * sum(r[dangling]) / n
-        r_new = α .* (M' * r) .+ dangling_contrib .+ (1-α) / n
-        r_new ./= max(sum(r_new), 1e-12)
-        maximum(abs, r_new .- r) < tol && break
-        r = r_new
+    # Build simple digraph for Graphs.jl pagerank
+    dg = Graphs.SimpleDiGraph(g.n)
+    for i in 1:g.n
+        for j in g.adj[i, :].nzind
+            Graphs.add_edge!(dg, i, j)
+        end
     end
-    r
+    Graphs.pagerank(dg, α; n=max_iter, ε=tol)
 end
