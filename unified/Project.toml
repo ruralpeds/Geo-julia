@@ -1,0 +1,103 @@
+[deps]
+# Infrastructure
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+
+# Vol 5: ML Production
+DecisionTree = "7806a523-6efd-50cb-b5f6-3fa6f1930dbb"
+Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
+SimpleWeightedGraphs = "47aef6b3-ad0c-573a-a1e2-d07658019622"
+
+# Vol 6: Advanced Inference
+AbstractGPs = "b5f15fda-6b1a-42b0-b0bb-9193bdb4edec"
+KernelFunctions = "ec8451be-7e33-11e9-00cf-bbf324bd1392"
+Optim = "429524aa-4258-5aef-a3af-852621145aeb"
+
+# Vol 7: Deep Learning & Bayesian
+Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
+Optimisers = "3bd65402-5787-11e9-1adc-39752487f4e2"
+Zygote = "e88e6eb3-aa80-5325-afca-941959d7151f"
+Turing = "fce5fe82-541a-59a6-adf8-730c64b5f9a0"
+MCMCChains = "c7f686f2-ff18-58e9-bc7b-31028e88f75d"
+
+# Vol 8: Equity & Spatial
+Distances = "b4f34e82-e78d-54a5-968a-f98e89d6e8f7"
+NearestNeighbors = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
+StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+
+# Vol 9: Survival, Networks, Time Series
+OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
+Survival = "943bc407-6b1d-5cb4-9a3c-90a10f35ad64"
+StateSpaceModels = "99342f36-827c-5390-97c9-d7f9ee765c78"
+
+# Vol 10: Geostatistics
+GeoStats = "dcc97b0b-8ce5-5539-9008-bb190f959ef6"
+Variography = "04a0146e-e6df-5636-8d7f-62fa9eb0b20c"
+KernelDensity = "5ab0869b-81aa-558d-bb23-cbf5423bbe9b"
+Clustering = "aaaa29a8-35af-508c-8bc3-b662a17a0fe5"
+
+# Vol 11: Causal Inference
+GLM = "38e38edf-8417-5370-95a0-9cdc8944a806"
+
+# Vol 12: Optimization
+JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
+HiGHS = "87dc4568-4c63-4d18-b0c0-bb2238e4078b"
+
+[sources]
+HealthcareML = {path = "../vol5_ml_production/packages/HealthcareML"}
+Vol5NetworkHealth = {path = "../vol5_ml_production/packages/NetworkHealth"}
+TemporalHealth = {path = "../vol5_ml_production/packages/TemporalHealth"}
+CausalHealth = {path = "../vol6_advanced_inference/packages/CausalHealth"}
+GaussianProcessHealth = {path = "../vol6_advanced_inference/packages/GaussianProcessHealth"}
+DeepHealth = {path = "../vol7_deep_learning/packages/DeepHealth"}
+BayesianHealth = {path = "../vol7_deep_learning/packages/BayesianHealth"}
+SpatialRegression = {path = "../vol8_equity_spatial/packages/SpatialRegression"}
+HealthEquity = {path = "../vol8_equity_spatial/packages/HealthEquity"}
+ConformalHealth = {path = "../vol8_equity_spatial/packages/ConformalHealth"}
+SurvivalAnalysis = {path = "../vol9_survival_networks_ts/packages/SurvivalAnalysis"}
+Vol9NetworkHealth = {path = "../vol9_survival_networks_ts/packages/NetworkHealth"}
+TimeSeriesHealth = {path = "../vol9_survival_networks_ts/packages/TimeSeriesHealth"}
+GeostatHealth = {path = "../vol10_geostatistics_mapping/packages/GeostatHealth"}
+Vol10PointPatterns = {path = "../vol10_geostatistics_mapping/packages/PointPatterns"}
+DiseaseMapping = {path = "../vol10_geostatistics_mapping/packages/DiseaseMapping"}
+CausalInference = {path = "../vol11_causal_inference/packages/CausalInference"}
+PolicyEval = {path = "../vol11_causal_inference/packages/PolicyEval"}
+SpatialCausal = {path = "../vol11_causal_inference/packages/SpatialCausal"}
+FacilityLocation = {path = "../vol12_health_optimization/packages/FacilityLocation"}
+HealthRouting = {path = "../vol12_health_optimization/packages/HealthRouting"}
+ResourceAllocation = {path = "../vol12_health_optimization/packages/ResourceAllocation"}
+InfectiousDisease = {path = "../vol13_spatial_epidemiology/packages/InfectiousDisease"}
+SurveillanceSystems = {path = "../vol13_spatial_epidemiology/packages/SurveillanceSystems"}
+HealthIntelligence = {path = "../vol13_spatial_epidemiology/packages/HealthIntelligence"}
+
+[compat]
+julia = "1.10"
+DataFrames = "1"
+Distributions = "0.25"
+StatsBase = "0.33, 0.34"
+GLM = "1"
+Flux = "0.14"
+Turing = "0.30, 0.31, 0.32, 0.33, 0.34, 0.35"
+JuMP = "1"
+HiGHS = "1"
+Graphs = "1"
+GeoStats = "0.50, 0.51, 0.52, 0.53, 0.54, 0.55, 0.56, 0.57, 0.58, 0.59, 0.60"
+OrdinaryDiffEq = "6"
+Optim = "1"
+NearestNeighbors = "0.4"
+Distances = "0.10"
+KernelFunctions = "0.10"
+AbstractGPs = "0.5"
+StateSpaceModels = "0.6, 0.7"
+MCMCChains = "6"
+Zygote = "0.6"
+Optimisers = "0.3, 0.4"
+KernelDensity = "0.6"
+Clustering = "0.15"
+DecisionTree = "0.12, 0.13"
+Variography = "0.21, 0.22, 0.23"
+SimpleWeightedGraphs = "1"
+Survival = "0.3"
