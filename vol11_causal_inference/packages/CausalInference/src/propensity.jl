@@ -1,6 +1,4 @@
-# propensity.jl — Logistic regression propensity score estimation
-
-sigmoid(x::Real) = x > 0 ? 1.0/(1.0+exp(-x)) : exp(x)/(1.0+exp(x))
+# propensity.jl — Logistic regression propensity score estimation using GLM.jl
 
 struct PropensityModel
     β::Vector{Float64}          # coefficients (intercept first)
@@ -14,46 +12,35 @@ end
 """
     ps_fit(D, X; feature_names, λ, max_iter, tol) -> PropensityModel
 
-Estimate propensity scores via logistic regression using Newton-Raphson.
-`D` is binary treatment (0/1), `X` is n×p covariate matrix (no intercept column).
-Ridge penalty λ improves numerical stability.
+Estimate propensity scores via logistic regression using GLM.jl.
+`D` is binary treatment (0/1), `X` is n*p covariate matrix (no intercept column).
+Ridge penalty `λ` and iteration parameters (`max_iter`, `tol`) are accepted
+for API compatibility but GLM handles fitting internally.
 """
 function ps_fit(D::AbstractVector, X::AbstractMatrix;
                 feature_names=["x$i" for i in 1:size(X,2)],
                 λ::Float64=1e-4, max_iter::Int=200, tol::Float64=1e-8)
     n, p = size(X)
-    # Design matrix with intercept
-    Xd = hcat(ones(n), X)
-    β  = zeros(p + 1)
-    converged = false
-    n_iter = 0
 
-    for iter in 1:max_iter
-        η  = Xd * β
-        p̂  = sigmoid.(η)
-        # Gradient: ∇ℓ = X'(D - p̂) - λβ (no penalty on intercept)
-        pen     = vcat(0.0, λ .* β[2:end])
-        grad    = Xd' * (D .- p̂) .- pen
-        # Hessian: H = -X'WX - λI (intercept excluded from penalty)
-        W       = p̂ .* (1.0 .- p̂)
-        H       = -(Xd' * (W .* Xd)) .- diagm(vcat(0.0, fill(λ, p)))
-        # Newton step
-        Δ = -H \ grad
-        β += Δ
-        n_iter = iter
-        if norm(Δ) < tol; converged = true; break; end
-    end
+    # Build a DataFrame for GLM
+    df = DataFrame(X, [Symbol("x$i") for i in 1:p])
+    df.treatment = Float64.(D)
 
-    η  = Xd * β
-    p̂  = sigmoid.(η)
-    ll = sum(D .* η .- log1p.(exp.(η)))
-    # SE from inverse Hessian diagonal
-    W    = p̂ .* (1.0 .- p̂)
-    H    = -(Xd' * (W .* Xd)) .- diagm(vcat(0.0, fill(λ, p)))
-    Hinv = inv(H)
-    se   = sqrt.(abs.(diag(Hinv)))
+    # Construct formula: treatment ~ x1 + x2 + ...
+    rhs = p == 1 ? Term(:x1) : foldl(+, [Term(Symbol("x$i")) for i in 1:p])
+    f = FormulaTerm(Term(:treatment), rhs)
 
-    PropensityModel(β, se, ll, n_iter, converged, feature_names)
+    # Fit logistic regression via GLM
+    model = glm(f, df, Binomial(), LogitLink();
+                maxiter=max_iter, atol=tol)
+
+    β  = coef(model)
+    se = stderror(model)
+    ll = loglikelihood(model)
+    n_iter_actual = GLM.niter(model)
+    conv = GLM.converged(model)
+
+    PropensityModel(β, se, ll, n_iter_actual, conv, feature_names)
 end
 
 """
@@ -64,13 +51,15 @@ Return estimated propensity scores e(X) = P(D=1|X).
 function ps_predict(model::PropensityModel, X::AbstractMatrix)
     n = size(X, 1)
     Xd = hcat(ones(n), X)
-    sigmoid.(Xd * model.β)
+    # Use the logistic (sigmoid) function
+    η = Xd * model.β
+    @. 1.0 / (1.0 + exp(-η))
 end
 
 """
     ps_trim(ps, D, y; lo, hi) -> (ps_t, D_t, y_t, idx)
 
-Trim to common support: keep obs with lo ≤ ps ≤ hi.
+Trim to common support: keep obs with lo <= ps <= hi.
 Default lo=0.05, hi=0.95 (Crump et al. 2009 rule-of-thumb is 0.1).
 """
 function ps_trim(ps::AbstractVector, D::AbstractVector, y::AbstractVector;
