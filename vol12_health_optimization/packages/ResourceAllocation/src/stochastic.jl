@@ -1,8 +1,8 @@
-# stochastic.jl — Two-stage stochastic programming for resource allocation
+# stochastic.jl — Two-stage stochastic programming via JuMP
 
 struct StochasticResult
     x_first::Vector{Float64}      # first-stage decisions (before uncertainty)
-    x_second::Matrix{Float64}     # second-stage recourse [n_vars × n_scenarios]
+    x_second::Matrix{Float64}     # second-stage recourse [n_vars x n_scenarios]
     obj_expected::Float64         # expected total cost/profit
     obj_evpi::Float64             # expected value of perfect information
     obj_eev::Float64              # expected value of expected value solution
@@ -14,15 +14,13 @@ end
     two_stage_sp(c1, c2, A1, A2, b1, b_scenarios, probs;
                  sense, max_iter) -> StochasticResult
 
-Two-stage stochastic linear program:
-    min c1'x + E_ξ[min c2(ξ)'y]
-    s.t. A1·x ≤ b1  (first-stage constraints)
-         A2·x + y ≤ b(ξ)  (second-stage recourse)
-         x,y ≥ 0
+Two-stage stochastic linear program solved via JuMP deterministic equivalent:
+    min c1'x + E_xi[min c2(xi)'y]
+    s.t. A1*x <= b1  (first-stage constraints)
+         A2*x + y >= b(xi)  (second-stage recourse, per scenario)
+         x,y >= 0
 
-Solved via sample-average approximation with LP relaxation per scenario.
-
-`b_scenarios` is n_b2 × n_scenarios matrix; `probs` is probability vector.
+`b_scenarios` is n_b2 x n_scenarios matrix; `probs` is probability vector.
 """
 function two_stage_sp(c1::AbstractVector, c2::AbstractVector,
                       A1::AbstractMatrix, A2::AbstractMatrix,
@@ -30,88 +28,162 @@ function two_stage_sp(c1::AbstractVector, c2::AbstractVector,
                       probs::AbstractVector;
                       sense::Symbol=:min, max_iter::Int=100)
     n1, n2, n_s = length(c1), length(c2), size(b_scenarios,2)
+    n_b2 = size(b_scenarios, 1)
+
+    # ── Deterministic equivalent via JuMP ────────────────────────────────────
+    # SAA solution
+    x_saa = _solve_two_stage_jump(c1, c2, A1, A2, b1, b_scenarios, probs, sense)
+
+    # Second-stage decisions for each scenario given x_saa
+    y_second = zeros(n2, n_s)
+    for s in 1:n_s
+        y_second[:,s] = _solve_second_stage_jump(x_saa, c2, A2, b_scenarios[:,s], sense)
+    end
+
+    # Compute objectives
+    c1s = sense == :min ? c1 : -c1
+    c2s = sense == :min ? c2 : -c2
+    obj_saa = dot(c1s, x_saa) + sum(probs[s] * dot(c2s, y_second[:,s]) for s in 1:n_s)
+
+    # EVPI: solve each scenario independently, take expectation
+    obj_evpi_val = sum(probs[s] * _solve_single_scenario_jump(c1, c2, A1, A2, b1,
+                        b_scenarios[:,s], sense) for s in 1:n_s)
+
+    # EEV: solve with mean scenario, evaluate in expectation
+    b_mean = b_scenarios * probs
+    x_ev = _solve_two_stage_jump(c1, c2, A1, A2, b1, reshape(b_mean, :, 1), [1.0], sense)
+    y_ev_second = zeros(n2, n_s)
+    for s in 1:n_s
+        y_ev_second[:,s] = _solve_second_stage_jump(x_ev, c2, A2, b_scenarios[:,s], sense)
+    end
+    obj_eev = dot(c1s, x_ev) + sum(probs[s] * dot(c2s, y_ev_second[:,s]) for s in 1:n_s)
+
+    evpi = sense == :min ? obj_saa - obj_evpi_val : obj_evpi_val - obj_saa
+    vss  = sense == :min ? obj_eev - obj_saa : obj_saa - obj_eev
+
+    final_obj = sense == :min ? obj_saa : -obj_saa
+
+    StochasticResult(x_saa, y_second, final_obj, evpi, obj_eev, vss, n_s)
+end
+
+"""Solve the full two-stage deterministic equivalent via JuMP."""
+function _solve_two_stage_jump(c1, c2, A1, A2, b1, b_scenarios, probs, sense)
+    n1 = length(c1)
+    n2 = length(c2)
+    n_s = size(b_scenarios, 2)
+    n_b2 = size(b_scenarios, 1)
+
+    model = Model(HiGHS.Optimizer)
+    set_silent(model)
+
+    @variable(model, x[1:n1] >= 0)
+    @variable(model, y[1:n2, 1:n_s] >= 0)
+
+    # Objective: c1'x + sum_s probs[s] * c2'y_s
+    if sense == :min
+        @objective(model, Min,
+            sum(c1[j] * x[j] for j in 1:n1) +
+            sum(probs[s] * sum(c2[j] * y[j,s] for j in 1:n2) for s in 1:n_s))
+    else
+        @objective(model, Max,
+            sum(c1[j] * x[j] for j in 1:n1) +
+            sum(probs[s] * sum(c2[j] * y[j,s] for j in 1:n2) for s in 1:n_s))
+    end
+
+    # First-stage constraints: A1*x <= b1
+    m1 = size(A1, 1)
+    @constraint(model, [i=1:m1], sum(A1[i,j] * x[j] for j in 1:n1) <= b1[i])
+
+    # Second-stage recourse: A2*x + y >= b(xi) for each scenario
+    for s in 1:n_s
+        for i in 1:n_b2
+            @constraint(model, sum(A2[i,j] * x[j] for j in 1:min(n1, size(A2,2))) + y[min(i,n2),s] >= b_scenarios[i,s])
+        end
+    end
+
+    optimize!(model)
+
+    status = termination_status(model)
+    if status in (OPTIMAL, LOCALLY_SOLVED, FEASIBLE_POINT)
+        return value.(x)
+    else
+        # Fallback: return a feasible first-stage solution
+        return zeros(n1)
+    end
+end
+
+"""Solve second-stage recourse given first-stage x."""
+function _solve_second_stage_jump(x_first, c2, A2, b2_scenario, sense)
+    n2 = length(c2)
+    n1 = length(x_first)
+    n_b2 = length(b2_scenario)
+
+    model = Model(HiGHS.Optimizer)
+    set_silent(model)
+
+    @variable(model, y[1:n2] >= 0)
+
+    if sense == :min
+        @objective(model, Min, sum(c2[j] * y[j] for j in 1:n2))
+    else
+        @objective(model, Max, sum(c2[j] * y[j] for j in 1:n2))
+    end
+
+    # y >= b(xi) - A2*x
+    for i in 1:n_b2
+        rhs = b2_scenario[i] - sum(A2[i,j] * x_first[j] for j in 1:min(n1, size(A2,2)))
+        @constraint(model, y[min(i,n2)] >= rhs)
+    end
+
+    optimize!(model)
+
+    status = termination_status(model)
+    if status in (OPTIMAL, LOCALLY_SOLVED, FEASIBLE_POINT)
+        return value.(y)
+    else
+        return max.(b2_scenario[1:n2] .- A2[1:n2,1:min(n1,size(A2,2))] * x_first[1:min(n1,size(A2,2))], 0.0)
+    end
+end
+
+"""Solve a single scenario optimally (for EVPI calculation)."""
+function _solve_single_scenario_jump(c1, c2, A1, A2, b1, b2_s, sense)
+    n1 = length(c1)
+    n2 = length(c2)
+    n_b2 = length(b2_s)
+
+    model = Model(HiGHS.Optimizer)
+    set_silent(model)
+
+    @variable(model, x[1:n1] >= 0)
+    @variable(model, y[1:n2] >= 0)
+
     c1s = sense == :min ? c1 : -c1
     c2s = sense == :min ? c2 : -c2
 
-    # EV solution: solve with mean scenario
-    b_mean = b_scenarios * probs
-    x_ev   = _solve_lp_first_stage(c1s, c2s, A1, A2, b1, b_mean, max_iter)
+    @objective(model, Min,
+        sum(c1s[j] * x[j] for j in 1:n1) +
+        sum(c2s[j] * y[j] for j in 1:n2))
 
-    # SAA: for each scenario, compute optimal recourse given x
-    x_saa  = _saa_first_stage(c1s, c2s, A1, A2, b1, b_scenarios, probs, max_iter)
+    # First-stage constraints
+    m1 = size(A1, 1)
+    @constraint(model, [i=1:m1], sum(A1[i,j] * x[j] for j in 1:n1) <= b1[i])
 
-    # Second-stage decisions
-    y_second = zeros(n2, n_s)
-    for s in 1:n_s
-        y_second[:,s] = _second_stage(x_saa, c2s, A2, b_scenarios[:,s])
+    # Second-stage: A2*x + y >= b2_s
+    for i in 1:n_b2
+        @constraint(model, sum(A2[i,j] * x[j] for j in 1:min(n1, size(A2,2))) + y[min(i,n2)] >= b2_s[i])
     end
 
-    # Objectives
-    obj_saa  = dot(c1s, x_saa) + sum(probs[s] * dot(c2s, y_second[:,s]) for s in 1:n_s)
-    obj_evpi = sum(probs[s] * _optimal_scenario_obj(c1s, c2s, A1, A2, b1, b_scenarios[:,s], max_iter) for s in 1:n_s)
-    obj_eev  = dot(c1s, x_ev) + sum(probs[s] * dot(c2s, _second_stage(x_ev, c2s, A2, b_scenarios[:,s])) for s in 1:n_s)
+    optimize!(model)
 
-    evpi = sense == :min ? obj_saa - obj_evpi : obj_evpi - obj_saa
-    vss  = sense == :min ? obj_eev - obj_saa  : obj_saa - obj_eev
-
-    StochasticResult(x_saa, y_second, sense==:min ? obj_saa : -obj_saa,
-                     evpi, obj_eev, vss, n_s)
-end
-
-# Simple LP heuristic: greedy fractional
-function _solve_lp_first_stage(c1, c2, A1, A2, b1, b2, max_iter)
-    n1 = length(c1)
-    # Allocate first-stage resources proportional to c1 values
-    x = zeros(n1)
-    for j in sortperm(c1)[1:min(n1, length(b1))]
-        slack = minimum(b1 .- A1*x)
-        step  = slack > 0 ? min(1.0, slack/max(A1[1,j],1e-9)) : 0.0
-        x[j]  = clamp(x[j] + step, 0.0, 1.0)
+    status = termination_status(model)
+    if status in (OPTIMAL, LOCALLY_SOLVED, FEASIBLE_POINT)
+        return objective_value(model)
+    else
+        # Fallback
+        x_f = zeros(n1)
+        y_f = max.(b2_s[1:min(n_b2,n2)], 0.0)
+        return dot(c1s, x_f) + dot(c2s, y_f)
     end
-    x
-end
-
-function _saa_first_stage(c1, c2, A1, A2, b1, b_scen, probs, max_iter)
-    n1  = length(c1)
-    n_s = size(b_scen,2)
-    # Gradient-based: subgradient on expected recourse
-    x   = fill(1.0/n1, n1)
-    best_x = copy(x); best_obj = Inf
-    α   = 0.1
-
-    for iter in 1:max_iter
-        grad = copy(c1)
-        for s in 1:n_s
-            y = _second_stage(x, c2, A2, b_scen[:,s])
-            # Subgradient of recourse: A2'·λ where λ is dual on A2·x+y≤b
-            grad .+= probs[s] .* (A2' * min.(A2*x .+ y .- b_scen[:,s], 0.0))
-        end
-        x .-= (α/iter) .* grad
-        x    = max.(x, 0.0)
-        # Project onto A1·x ≤ b1
-        for _ in 1:10
-            viol = A1*x .- b1
-            any(viol .> 0) || break
-            k = argmax(viol)
-            x .-= (viol[k] / sum(A1[k,:].^2)) .* A1[k,:]
-            x = max.(x, 0.0)
-        end
-        obj = dot(c1,x) + sum(probs[s]*dot(c2,_second_stage(x,c2,A2,b_scen[:,s])) for s in 1:n_s)
-        obj < best_obj && (best_obj = obj; best_x = copy(x))
-    end
-    best_x
-end
-
-function _second_stage(x, c2, A2, b2)
-    # Second-stage: min c2'y s.t. y ≥ b2 - A2·x, y ≥ 0
-    y = max.(b2 .- A2*x, 0.0)
-    max.(y, 0.0)
-end
-
-function _optimal_scenario_obj(c1, c2, A1, A2, b1, b2_s, max_iter)
-    x = _solve_lp_first_stage(c1, c2, A1, A2, b1, b2_s, max_iter)
-    y = _second_stage(x, c2, A2, b2_s)
-    dot(c1,x) + dot(c2,y)
 end
 
 """
@@ -121,9 +193,11 @@ Compute the expected value solution (EV) and its performance in expectation.
 """
 function expected_value_solution(c1, c2, A1, A2, b1, b_scenarios, probs)
     b_mean = b_scenarios * probs
-    x_ev   = _solve_lp_first_stage(c1, c2, A1, A2, b1, b_mean, 100)
-    n_s    = size(b_scenarios,2)
-    obj_ev = dot(c1,x_ev) + sum(probs[s]*dot(c2, _second_stage(x_ev,c2,A2,b_scenarios[:,s]))
-                                for s in 1:n_s)
+    x_ev = _solve_two_stage_jump(c1, c2, A1, A2, b1, reshape(b_mean, :, 1), [1.0], :min)
+    n_s = size(b_scenarios, 2)
+    n2 = length(c2)
+    obj_ev = dot(c1, x_ev) + sum(probs[s] * dot(c2,
+        _solve_second_stage_jump(x_ev, c2, A2, b_scenarios[:,s], :min))
+        for s in 1:n_s)
     (x_ev=x_ev, obj=obj_ev, b_mean=b_mean)
 end

@@ -29,12 +29,13 @@ function composite_risk_score(X::AbstractMatrix;
     d == length(weights) || error("weights length must match number of domains")
     any(weights .< 0) && error("all weights must be non-negative")
 
-    # Standardise each domain
+    # Standardise each domain using StatsBase
     Z = zeros(n, d)
     for j in 1:d
-        col = X[:, j]
-        μ, σ = mean(col), max(std(col; corrected=true), 1e-12)
-        Z[:, j] = (col .- μ) ./ σ
+        col = Float64.(X[:, j])
+        μ_j = mean(col)
+        σ_j = max(std(col; corrected=true), 1e-12)
+        Z[:, j] = (col .- μ_j) ./ σ_j
     end
 
     w = weights ./ max(sum(weights), 1e-12)
