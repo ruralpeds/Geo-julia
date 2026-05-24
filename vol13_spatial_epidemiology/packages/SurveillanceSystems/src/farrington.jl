@@ -36,7 +36,7 @@ function farrington(x::AbstractVector{<:Real};
     threshold = fill(NaN, T)
     upper95   = fill(NaN, T)
 
-    z_alpha = _qnorm(1.0 - alpha)
+    z_alpha = quantile(Normal(0, 1), 1.0 - alpha)
 
     for t in (baseline_weeks+1):T
         base_idx = max(1, t - baseline_weeks):(t-1)
