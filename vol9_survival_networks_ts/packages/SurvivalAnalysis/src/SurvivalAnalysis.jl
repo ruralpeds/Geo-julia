@@ -15,6 +15,10 @@ Pure-Julia survival analysis for healthcare data.
 module SurvivalAnalysis
 
 using Statistics, LinearAlgebra, Random
+using Survival
+using StatsBase
+using Distributions
+using Optim
 
 include("estimators.jl")
 include("cox.jl")

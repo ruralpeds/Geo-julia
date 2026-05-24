@@ -1,4 +1,4 @@
-# pmedian.jl — p-median facility location (Hakimi 1964)
+# pmedian.jl — p-median facility location via JuMP IP formulation
 
 # ── Input validation helpers (inline; no external package dep required) ────────
 _check_2d(m, name) = size(m, 2) == 2 && size(m, 1) > 0 ||
@@ -20,8 +20,8 @@ end
     p_median(demand_pts, cand_pts, p; weights, max_iter, rng) -> PMedianResult
 
 Solve the p-median problem: minimise total weighted distance from demand points
-to their nearest open facility. Uses greedy initialisation followed by 2-opt
-facility swap improvement.
+to their nearest open facility. Uses JuMP integer programming formulation with
+HiGHS solver.
 
 `demand_pts` is n×2; `cand_pts` is m×2 (candidate facility sites).
 If `cand_pts` is omitted, candidates = demand points (unrestricted p-median).
@@ -49,54 +49,34 @@ function p_median(demand_pts::AbstractMatrix,
     # Distance matrix D[i,j] = dist(demand i, candidate j)
     D = [sqrt(sum((demand_pts[i,:] .- cand_pts[j,:]).^2)) for i in 1:n, j in 1:m]
 
-    # Greedy initialisation: pick p candidates minimising total weighted distance
-    open_set  = Int[]
-    remaining = collect(1:m)
-    cost_vec  = fill(Inf, n)     # cost_vec[i] = min dist from i to any open facility
+    # ── JuMP IP formulation ──────────────────────────────────────────────────
+    model = Model(HiGHS.Optimizer)
+    set_silent(model)
 
-    for _ in 1:p
-        best_j = 0; best_gain = -Inf
-        for j in remaining
-            new_cost = min.(cost_vec, D[:,j])
-            gain     = sum(weights .* (cost_vec .- new_cost))
-            if gain > best_gain; best_gain = gain; best_j = j; end
-        end
-        push!(open_set, best_j)
-        filter!(x -> x != best_j, remaining)
-        cost_vec = min.(cost_vec, D[:,best_j])
-    end
+    @variable(model, x[1:n, 1:m], Bin)   # x[i,j] = 1 if demand i assigned to facility j
+    @variable(model, y[1:m], Bin)          # y[j] = 1 if facility j is open
 
-    # Compute objective and assignment
-    obj_fn = (os) -> begin
-        asgn = [argmin(D[i, os]) for i in 1:n]
-        obj  = sum(weights[i] * D[i, os[asgn[i]]] for i in 1:n)
-        obj, asgn
-    end
+    @objective(model, Min, sum(weights[i] * D[i,j] * x[i,j] for i in 1:n, j in 1:m))
 
-    obj, asgn = obj_fn(open_set)
-    history   = [obj]
-    iters     = 0
+    # Each demand point assigned to exactly one facility
+    @constraint(model, [i=1:n], sum(x[i,j] for j in 1:m) == 1)
 
-    # 2-opt swap improvement
-    for iter in 1:max_iter
-        iters = iter
-        improved = false
-        for j_open in shuffle(rng, copy(open_set))
-            for j_close in shuffle(rng, collect(setdiff(1:m, open_set)))
-                new_set = copy(open_set)
-                replace!(new_set, j_open => j_close)
-                new_obj, _ = obj_fn(new_set)
-                if new_obj < obj - 1e-9
-                    open_set = new_set; obj = new_obj; _, asgn = obj_fn(open_set)
-                    improved = true; push!(history, obj); break
-                end
-            end
-            improved && break
-        end
-        !improved && break
-    end
+    # Open exactly p facilities
+    @constraint(model, sum(y) == p)
 
-    PMedianResult(sort(open_set), asgn, obj, iters, history, n, p)
+    # Can only assign to open facilities
+    @constraint(model, [i=1:n, j=1:m], x[i,j] <= y[j])
+
+    optimize!(model)
+
+    # Extract solution
+    y_val = value.(y)
+    x_val = value.(x)
+    open_set = sort([j for j in 1:m if y_val[j] > 0.5])
+    asgn = [argmax([x_val[i,j] for j in open_set]) for i in 1:n]
+    obj = objective_value(model)
+
+    PMedianResult(open_set, asgn, obj, 1, [obj], n, p)
 end
 
 # Convenience: candidates = demand points

@@ -1,4 +1,5 @@
 # estimators.jl — Kaplan-Meier, Nelson-Aalen, log-rank and Wilcoxon tests
+# Backed by Survival.jl for core estimation
 
 using Statistics
 
@@ -39,7 +40,20 @@ function kaplan_meier(times::AbstractVector, status::AbstractVector{<:Integer};
     n = length(times)
     @assert length(status) == n && length(weights) == n
 
-    # Collect unique event times
+    # Use Survival.jl for core KM estimation
+    # Build event-time objects: true = event, false = censored
+    evt = [status[i] == 1 ? Survival.EventTime(Float64(times[i]), true) :
+                            Survival.EventTime(Float64(times[i]), false) for i in 1:n]
+
+    km_fit = Survival.fit(Survival.KaplanMeier, evt)
+
+    # Extract times and survival from Survival.jl result
+    km_times_raw = km_fit.times
+    km_surv_raw  = km_fit.survival
+
+    # Build the detailed table with n_risk, n_event, n_censor
+    # (Survival.jl KM object has times and survival; we compute details for
+    #  weighted data and CI ourselves to preserve full API)
     idx_sorted = sortperm(times)
     t_sorted   = times[idx_sorted]
     s_sorted   = status[idx_sorted]
@@ -48,7 +62,6 @@ function kaplan_meier(times::AbstractVector, status::AbstractVector{<:Integer};
     event_times = unique(t_sorted[s_sorted .== 1])
     sort!(event_times)
 
-    # Build KM table
     km_times = Float64[]
     km_surv  = Float64[]
     km_risk  = Int[]
@@ -56,10 +69,7 @@ function kaplan_meier(times::AbstractVector, status::AbstractVector{<:Integer};
     km_cens  = Int[]
 
     S = 1.0
-    t_idx = 1  # current position in sorted arrays
-
     for t in event_times
-        # Count risk set, events, censored at this time
         n_at_risk = sum(w_sorted[j] for j in 1:n if t_sorted[j] >= t)
         n_ev      = sum(w_sorted[j] for j in 1:n if t_sorted[j] == t && s_sorted[j] == 1)
         n_cen_t   = sum(w_sorted[j] for j in 1:n if t_sorted[j] == t && s_sorted[j] == 0)
@@ -72,6 +82,12 @@ function kaplan_meier(times::AbstractVector, status::AbstractVector{<:Integer};
         push!(km_event, round(Int, n_ev))
         push!(km_cens,  round(Int, n_cen_t))
         S = S_new
+    end
+
+    # If no weights (all ones), use Survival.jl's survival values directly
+    # for numerical consistency
+    if all(w -> w ≈ 1.0, weights) && length(km_times) == length(km_times_raw)
+        km_surv .= km_surv_raw
     end
 
     # Greenwood's formula for variance → log-log CI
@@ -147,9 +163,21 @@ end
     nelson_aalen(times, status) -> NAResult
 
 Nelson-Aalen estimator: Ĥ(t) = Σ_{t_i ≤ t} d_i / r_i.
+Uses Survival.jl for core estimation.
 """
 function nelson_aalen(times::AbstractVector, status::AbstractVector{<:Integer})
     n = length(times)
+
+    # Use Survival.jl for core NA estimation
+    evt = [status[i] == 1 ? Survival.EventTime(Float64(times[i]), true) :
+                            Survival.EventTime(Float64(times[i]), false) for i in 1:n]
+
+    na_fit = Survival.fit(Survival.NelsonAalen, evt)
+
+    na_times_raw = na_fit.times
+    na_H_raw     = na_fit.cumulative_hazard
+
+    # Compute variance for CI (Survival.jl may not provide this directly)
     event_times = sort(unique(times[status .== 1]))
 
     na_times = Float64[]
@@ -166,6 +194,11 @@ function nelson_aalen(times::AbstractVector, status::AbstractVector{<:Integer})
         push!(na_times, Float64(t))
         push!(na_H, H)
         push!(na_var, V)
+    end
+
+    # Use Survival.jl values where possible for consistency
+    if length(na_times) == length(na_times_raw)
+        na_H .= na_H_raw
     end
 
     # Pointwise CI: log-transformed
@@ -198,6 +231,10 @@ end
 Mantel-Cox log-rank test (or Peto-Peto Wilcoxon) comparing survival curves
 across `groups`. Returns χ²(k-1) test statistic.
 
+For the standard log-rank test, delegates to `Survival.logrank(...)` when
+possible (two-group case). For Wilcoxon or k>2 groups, uses custom
+implementation.
+
 `test_type ∈ {:logrank, :wilcoxon}`
 """
 function logrank_test(times::AbstractVector, status::AbstractVector{<:Integer},
@@ -206,6 +243,39 @@ function logrank_test(times::AbstractVector, status::AbstractVector{<:Integer},
     k       = length(g_vals)
     @assert k >= 2 "Need at least 2 groups"
 
+    # For standard log-rank with 2 groups, try Survival.jl
+    if test_type == :logrank && k == 2
+        evt1 = [status[i] == 1 ? Survival.EventTime(Float64(times[i]), true) :
+                                 Survival.EventTime(Float64(times[i]), false)
+                for i in 1:length(times) if groups[i] == g_vals[1]]
+        evt2 = [status[i] == 1 ? Survival.EventTime(Float64(times[i]), true) :
+                                 Survival.EventTime(Float64(times[i]), false)
+                for i in 1:length(times) if groups[i] == g_vals[2]]
+
+        try
+            lr = Survival.logrank(evt1, evt2)
+            # Extract statistic and p-value from Survival.jl result
+            # Also compute O and E for our return struct
+            O, E = _compute_OE(times, status, groups, g_vals, :logrank)
+            return LogRankResult(lr.chisq, lr.pvalue, 1, :logrank, collect(g_vals), O, E)
+        catch
+            # Fall through to custom implementation
+        end
+    end
+
+    # Custom implementation for Wilcoxon or k>2 groups
+    O, E = _compute_OE(times, status, groups, g_vals, test_type)
+
+    # χ² statistic
+    stat = sum((O[i] - E[i])^2 / max(E[i], 1e-10) for i in 1:k)
+    df   = k - 1
+    p    = 1.0 - _chi2_cdf(stat, df)
+
+    LogRankResult(stat, p, df, test_type, collect(g_vals), O, E)
+end
+
+function _compute_OE(times, status, groups, g_vals, test_type)
+    k = length(g_vals)
     event_times = sort(unique(times[status .== 1]))
     O = zeros(k); E = zeros(k)
 
@@ -215,10 +285,9 @@ function logrank_test(times::AbstractVector, status::AbstractVector{<:Integer},
         d_total = sum((times .== t) .& (status .== 1))
         r_total == 0 && continue
 
-        # KM weight for Wilcoxon
         w = 1.0
         if test_type == :wilcoxon
-            w = r_total   # Peto-Peto weight ≈ n_risk
+            w = r_total
         end
 
         for (gi, g) in enumerate(g_vals)
@@ -229,50 +298,13 @@ function logrank_test(times::AbstractVector, status::AbstractVector{<:Integer},
             E[gi] += e_g
         end
     end
-
-    # χ² statistic (using k-1 contrast)
-    # For 2 groups: (O1-E1)²/E1 + (O2-E2)²/E2
-    stat = sum((O[i] - E[i])^2 / max(E[i], 1e-10) for i in 1:k)
-    df   = k - 1
-    p    = 1.0 - _chi2_cdf(stat, df)
-
-    LogRankResult(stat, p, df, test_type, collect(g_vals), O, E)
+    return O, E
 end
 
 # ── Chi-squared CDF (regularized incomplete gamma, series expansion) ──────────
 
 function _chi2_cdf(x::Float64, k::Int)
     x <= 0.0 && return 0.0
-    _regularized_gamma_lower(k / 2.0, x / 2.0)
-end
-
-function _regularized_gamma_lower(a::Float64, x::Float64)
-    x == 0.0 && return 0.0
-    # Series expansion: P(a,x) = e^{-x} x^a / Γ(a) Σ x^n/Γ(a+n+1)
-    term = 1.0 / a
-    s = term
-    for n in 1:200
-        term *= x / (a + n)
-        s += term
-        abs(term) < 1e-12 * abs(s) && break
-    end
-    s * exp(-x + a * log(x) - _log_gamma(a))
-end
-
-function _log_gamma(x::Float64)
-    # Lanczos approximation
-    if x < 0.5
-        return log(π) - log(abs(sin(π*x))) - _log_gamma(1.0 - x)
-    end
-    x -= 1.0
-    g = 7
-    c = [0.99999999999980993, 676.5203681218851, -1259.1392167224028,
-         771.32342877765313, -176.61502916214059, 12.507343278686905,
-         -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7]
-    t = x + g + 0.5
-    sum_c = c[1]
-    for i in 2:9
-        sum_c += c[i] / (x + i - 1)
-    end
-    0.5*log(2π) + (x+0.5)*log(t) - t + log(sum_c)
+    # Use Distributions.jl
+    return Distributions.cdf(Distributions.Chisq(k), x)
 end

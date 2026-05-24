@@ -1,6 +1,7 @@
 module HealthRouting
 
 using Statistics, LinearAlgebra, Random
+using JuMP, HiGHS
 
 include("tsp.jl")
 include("vrp.jl")
