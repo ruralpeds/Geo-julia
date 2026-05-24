@@ -83,8 +83,8 @@ function health_needs_index(access::AbstractVector,
     n = length(access)
 
     z(v) = begin
-        μ, σ = mean(v), max(std(v; corrected=true), 1e-12)
-        (Float64.(v) .- μ) ./ σ
+        vf = Float64.(v)
+        zscore(vf)
     end
 
     za = z(access); zd = z(deprivation); zb = z(disease_burden)
@@ -135,13 +135,24 @@ function risk_adjusted_outcomes(observed::AbstractVector{<:Real},
      n_high=sum(high_out), n_low=sum(low_out), label=label)
 end
 
-# Byar's approximation for exact Poisson CI on O/E ratio
+# Poisson CI on O/E ratio using Distributions.jl
+# Byar's approximation is standard for SMR CIs; we keep it for consistency
+# but use Distributions.Poisson quantiles for small counts
 function _byar_lower(o::Real, e::Real)
     o == 0 && return 0.0
     o_f = Float64(o); e_f = max(Float64(e), 1e-12)
+    # For small counts, use exact Poisson quantile
+    if o_f < 20
+        lo = dist_quantile(Poisson(o_f), 0.025)
+        return lo / e_f
+    end
     (o_f * (1 - 1/(9o_f) - 1.645/sqrt(o_f))^3) / e_f
 end
 function _byar_upper(o::Real, e::Real)
     o_f = Float64(o); e_f = max(Float64(e), 1e-12)
+    if o_f < 20
+        hi = dist_quantile(Poisson(o_f + 1), 0.975)
+        return hi / e_f
+    end
     ((o_f+1) * (1 - 1/(9*(o_f+1)) + 1.645/sqrt(o_f+1))^3) / e_f
 end

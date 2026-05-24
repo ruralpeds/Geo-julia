@@ -65,13 +65,13 @@ function bip_branch_bound(c::AbstractVector, A::AbstractMatrix, b::AbstractVecto
         catch
             gap_val = 0.0
         end
-        node_count = 1
+        n_nodes_explored = 1
         try
-            node_count = Int(node_count(model))
+            n_nodes_explored = Int(JuMP.node_count(model))
         catch
-            node_count = 1
+            n_nodes_explored = 1
         end
-        BIPResult(x_val, obj, node_count, gap_val, true, :jump_highs)
+        BIPResult(x_val, obj, n_nodes_explored, gap_val, true, :jump_highs)
     else
         BIPResult(zeros(Int, n), sense == :max ? -Inf : Inf, 1, Inf, false, :jump_highs)
     end
