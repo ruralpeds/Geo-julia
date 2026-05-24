@@ -13,16 +13,23 @@ struct IPWResult
     weights_control::Vector{Float64}
 end
 
-# ── Outcome model: simple OLS ─────────────────────────────────────────────────
+# -- Outcome model: OLS via GLM.jl --------------------------------------------
 
 function _ols_predict(X_train, y_train, X_pred)
-    Xb   = hcat(ones(size(X_train, 1)), X_train)
-    Xp   = hcat(ones(size(X_pred,  1)), X_pred)
-    β    = (Xb' * Xb + 1e-8*I) \ (Xb' * y_train)
-    Xp * β
+    n_train, p = size(X_train)
+    df = DataFrame(X_train, [Symbol("v$i") for i in 1:p])
+    df.y = Float64.(y_train)
+
+    rhs = p == 1 ? Term(:v1) : foldl(+, [Term(Symbol("v$i")) for i in 1:p])
+    f = FormulaTerm(Term(:y), rhs)
+
+    model = lm(f, df)
+
+    df_pred = DataFrame(X_pred, [Symbol("v$i") for i in 1:p])
+    predict(model, df_pred)
 end
 
-# ── Bootstrap SE helper ───────────────────────────────────────────────────────
+# -- Bootstrap SE helper ------------------------------------------------------
 
 function _bootstrap_se(fn, D, y, ps, X; n_boot=200, rng=Random.default_rng())
     n     = length(y)
@@ -34,14 +41,13 @@ function _bootstrap_se(fn, D, y, ps, X; n_boot=200, rng=Random.default_rng())
     std(ests)
 end
 
-# ── Horwitz-Thompson (unnormalised) ATE ───────────────────────────────────────
+# -- Horwitz-Thompson (unnormalised) ATE ---------------------------------------
 
 function ipw_ate(D::AbstractVector, y::AbstractVector, ps::AbstractVector;
                  estimator::Symbol=:hajek, n_boot::Int=200,
                  rng=Random.default_rng())
     n = length(y)
     n_t = sum(D .== 1); n_c = sum(D .== 0)
-    p̄   = mean(D)
 
     if estimator == :ht
         τ_fn = (d, yv, e, _) -> mean(d .* yv ./ e) - mean((1 .- d) .* yv ./ (1 .- e))
@@ -60,7 +66,7 @@ function ipw_ate(D::AbstractVector, y::AbstractVector, ps::AbstractVector;
     IPWResult(estimator, τ, se, τ-1.96se, τ+1.96se, n, n_t, n_c, w_t, w_c)
 end
 
-# ── Augmented IPW (doubly-robust AIPW) ───────────────────────────────────────
+# -- Augmented IPW (doubly-robust AIPW) ---------------------------------------
 
 """
     aipw_ate(D, y, ps, X; n_boot, rng) -> IPWResult
@@ -90,7 +96,7 @@ function aipw_ate(D::AbstractVector, y::AbstractVector,
     IPWResult(:aipw, τ, se, τ-1.96se, τ+1.96se, n, n_t, n_c, w_t, w_c)
 end
 
-# ── Overlap / Average Treatment Effect on the Overlap Pop. ───────────────────
+# -- Overlap / Average Treatment Effect on the Overlap Pop. -------------------
 
 """
     overlap_ate(D, y, ps; n_boot, rng) -> IPWResult
