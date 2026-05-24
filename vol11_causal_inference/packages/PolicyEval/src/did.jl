@@ -109,8 +109,8 @@ function event_study(y::AbstractVector, treat::AbstractVector,
         idx     = vcat([findall(==(u), unit_ids) for u in boot_u]...)
         isempty(idx) && continue
         XyB     = hcat(D_event[idx,:], y[idx])
-        ug      = [findfirst(==(unit_ids[i], units_v)) for i in idx]
-        tg      = [findfirst(==(time[i], periods))  for i in idx]
+        ug      = [findfirst(==(unit_ids[i]), units_v) for i in idx]
+        tg      = [findfirst(==(time[i]), periods)  for i in idx]
         for g in 1:length(units_v)
             ii = ug .== g; any(ii) && (XyB[ii,:] .-= mean(XyB[ii,:], dims=1))
         end
