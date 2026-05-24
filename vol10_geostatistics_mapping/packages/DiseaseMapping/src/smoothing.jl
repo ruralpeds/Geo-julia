@@ -1,6 +1,5 @@
 # smoothing.jl — Empirical Bayes smoothing, spatial scan statistic
-
-using Statistics, LinearAlgebra, Random
+# Uses Distributions.jl for Poisson random variates
 
 # ── Empirical Bayes smoothing (Marshall 1991) ─────────────────────────────────
 
@@ -28,11 +27,6 @@ end
     eb_smooth(O, E) -> EBSmoothedResult
 
 Empirical Bayes smoothing of area-level counts using Gamma-Poisson model.
-
-Moment estimates:
-  μ̂ = Σ O_i / Σ E_i          (overall rate)
-  σ̂² = Var(O_i/E_i) - μ̂/Ē   (variance of θ)
-  α̂ = μ̂²/σ̂², β̂ = μ̂/σ̂²
 """
 function eb_smooth(O::AbstractVector, E::AbstractVector)
     n  = length(O)
@@ -123,12 +117,7 @@ end
     spatial_scan(O, E, coords; max_pop_frac, n_sim, alpha, rng) -> Vector{ScanResult}
 
 Circular Poisson spatial scan statistic (Kulldorff 1997).
-
-For each candidate cluster (centre, radius):
-  LLR = O_in·log(O_in/E_in) + O_out·log(O_out/E_out) - O·log(O/E)  if O_in/E_in > 1
-  LLR = 0 otherwise (only interested in elevated clusters)
-
-p-value by Monte Carlo under H₀: O_i ~ Poisson(E_i).
+Uses Distributions.jl for Poisson random variate generation.
 """
 function spatial_scan(O::AbstractVector, E::AbstractVector,
                        coords::AbstractMatrix;
@@ -172,7 +161,7 @@ function spatial_scan(O::AbstractVector, E::AbstractVector,
 
     isnothing(best_result) && return ScanResult[]
 
-    # Monte Carlo p-value
+    # Monte Carlo p-value using Distributions.jl Poisson
     mc_llrs = zeros(n_sim)
     for s in 1:n_sim
         O_mc = [rand_poisson(rng, E_f[i]) for i in 1:n]
@@ -213,15 +202,13 @@ function _best_scan_llr(O, E, D, max_pop_frac, O_tot_ref, E_tot)
     best
 end
 
+"""
+    rand_poisson(rng, λ) -> Int
+
+Draw from Poisson(λ) using Distributions.jl.
+"""
 function rand_poisson(rng::AbstractRNG, λ::Float64)
     λ <= 0 && return 0
-    # Knuth algorithm for small λ
-    if λ < 30
-        L = exp(-λ); k = 0; p = 1.0
-        while p > L; p *= rand(rng); k += 1; end
-        return k - 1
-    else
-        # Normal approximation for large λ
-        return max(0, round(Int, λ + sqrt(λ) * randn(rng)))
-    end
+    dist = Distributions.Poisson(λ)
+    rand(rng, dist)
 end
