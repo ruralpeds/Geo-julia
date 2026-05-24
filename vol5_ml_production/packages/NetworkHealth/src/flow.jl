@@ -1,5 +1,8 @@
 # flow.jl — Network flow analysis for referral patterns
 # Chapter 36.4
+#
+# Uses Graphs.jl for shortest paths; keeps custom Edmonds-Karp max flow
+# (Graphs.jl max_flow requires specific capacity matrix format).
 
 """
     max_flow_bfs(g, source, sink) -> Float64
@@ -91,11 +94,21 @@ end
 """
     shortest_paths(g, source) -> Vector{Float64}
 
-BFS/Dijkstra shortest path distances from `source` to all nodes.
+BFS shortest path distances from `source` to all nodes using Graphs.jl.
 Returns Inf for unreachable nodes.
 """
 function shortest_paths(g::ReferralNetwork, source::Int)::Vector{Float64}
-    dist, _, _ = _bfs_single_source(g, source)
+    # Build simple digraph for Graphs.jl
+    dg = Graphs.SimpleDiGraph(g.n)
+    for i in 1:g.n
+        for j in g.adj[i, :].nzind
+            Graphs.add_edge!(dg, i, j)
+        end
+    end
+    ds = Graphs.dijkstra_shortest_paths(dg, source)
+    dist = Float64.(ds.dists)
+    # Graphs.jl returns typemax(Int) for unreachable; convert to Inf
+    dist[dist .>= typemax(Int) ÷ 2] .= Inf
     dist
 end
 
