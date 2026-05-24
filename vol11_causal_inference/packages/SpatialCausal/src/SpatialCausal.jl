@@ -1,6 +1,7 @@
 module SpatialCausal
 
 using Statistics, LinearAlgebra, Random
+using GLM, Distributions, NearestNeighbors, DataFrames
 
 include("spatial_did.jl")
 include("conley.jl")
