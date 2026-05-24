@@ -1,7 +1,8 @@
 """
     PointPatterns
 
-Pure-Julia spatial point pattern analysis for healthcare data.
+Spatial point pattern analysis for healthcare data, powered by
+NearestNeighbors.jl, KernelDensity.jl, and Clustering.jl.
 
 Exports: kde2d, KDE2DResult, silverman_bandwidth, lcv_bandwidth,
 hotspot_threshold, kde_intensity;
@@ -14,6 +15,10 @@ point_pattern_report, PointPatternReport, print_point_pattern_report
 module PointPatterns
 
 using Statistics, LinearAlgebra, Random
+using Distances
+using NearestNeighbors
+using Clustering: Clustering as _Clustering
+import KernelDensity
 
 include("kde.jl")
 include("ripley.jl")
