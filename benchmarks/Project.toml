@@ -1,0 +1,59 @@
+[deps]
+BenchmarkTools = "6e4b80f9-dd63-53aa-95a3-0cdb28fa8baf"
+Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
+LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
+Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+Printf = "de0858da-6303-5e67-8744-51eddeeeb8d7"
+
+# Volume packages
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
+OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
+Optim = "429524aa-4258-5aef-a3af-852621145aeb"
+Distances = "b4f34e82-e78d-54a5-968a-f98e89d6e8f7"
+NearestNeighbors = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
+StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
+GLM = "38e38edf-8417-5370-95a0-9cdc8944a806"
+JuMP = "4076af6c-e467-56ae-b986-b466b2749572"
+HiGHS = "87dc4568-4c63-4d18-b0c0-bb2238e4078b"
+Graphs = "86223c79-3864-5bf0-83f7-82e725a168b6"
+
+[sources]
+GeostatHealth = {path = "../vol10_geostatistics_mapping/packages/GeostatHealth"}
+PointPatterns = {path = "../vol10_geostatistics_mapping/packages/PointPatterns"}
+DiseaseMapping = {path = "../vol10_geostatistics_mapping/packages/DiseaseMapping"}
+InfectiousDisease = {path = "../vol13_spatial_epidemiology/packages/InfectiousDisease"}
+SurveillanceSystems = {path = "../vol13_spatial_epidemiology/packages/SurveillanceSystems"}
+HealthIntelligence = {path = "../vol13_spatial_epidemiology/packages/HealthIntelligence"}
+TimeSeriesHealth = {path = "../vol9_survival_networks_ts/packages/TimeSeriesHealth"}
+SurvivalAnalysis = {path = "../vol9_survival_networks_ts/packages/SurvivalAnalysis"}
+SpatialRegression = {path = "../vol8_equity_spatial/packages/SpatialRegression"}
+HealthEquity = {path = "../vol8_equity_spatial/packages/HealthEquity"}
+ConformalHealth = {path = "../vol8_equity_spatial/packages/ConformalHealth"}
+CausalInference = {path = "../vol11_causal_inference/packages/CausalInference"}
+PolicyEval = {path = "../vol11_causal_inference/packages/PolicyEval"}
+SpatialCausal = {path = "../vol11_causal_inference/packages/SpatialCausal"}
+FacilityLocation = {path = "../vol12_health_optimization/packages/FacilityLocation"}
+HealthRouting = {path = "../vol12_health_optimization/packages/HealthRouting"}
+ResourceAllocation = {path = "../vol12_health_optimization/packages/ResourceAllocation"}
+GaussianProcessHealth = {path = "../vol6_advanced_inference/packages/GaussianProcessHealth"}
+CausalHealth = {path = "../vol6_advanced_inference/packages/CausalHealth"}
+BayesianHealth = {path = "../vol7_deep_learning/packages/BayesianHealth"}
+
+[compat]
+julia = "1.10"
+BenchmarkTools = "1"
+JSON3 = "1"
+DataFrames = "1"
+Distributions = "0.25"
+StatsBase = "0.33, 0.34"
+GLM = "1"
+JuMP = "1"
+HiGHS = "1"
+Graphs = "1"
+OrdinaryDiffEq = "6"
+Optim = "1"
+NearestNeighbors = "0.4"
+Distances = "0.10"
