@@ -1,4 +1,4 @@
-# matching.jl — Nearest-neighbour propensity score matching
+# matching.jl — Nearest-neighbour propensity score matching using NearestNeighbors.jl
 
 struct MatchResult
     matched_pairs::Vector{Tuple{Int,Int}}  # (treated_idx, control_idx)
@@ -17,8 +17,8 @@ end
 """
     nn_match(D, y, ps, X; k, caliper, replace, rng) -> MatchResult
 
-Greedy 1:k nearest-neighbour propensity score matching.
-- `caliper`: maximum allowed |PSᵢ - PSⱼ| (default 0.2*SD(PS))
+Greedy 1:k nearest-neighbour propensity score matching using NearestNeighbors.jl KDTree.
+- `caliper`: maximum allowed |PSi - PSj| (default 0.2*SD(PS))
 - `replace=false`: without replacement (each control used once)
 """
 function nn_match(D::AbstractVector, y::AbstractVector,
@@ -32,6 +32,10 @@ function nn_match(D::AbstractVector, y::AbstractVector,
     n_t = length(treat_idx); n_c = length(control_idx)
     cal = isnothing(caliper) ? 0.2 * std(ps) : caliper
 
+    # Build a KDTree on control propensity scores (1D -> reshape to 1xN matrix)
+    ps_ctrl = reshape(Float64.(ps[control_idx]), 1, n_c)
+    tree = KDTree(ps_ctrl)
+
     # Sort treated by PS (improves greedy quality slightly)
     order   = sortperm(ps[treat_idx])
     sorted_t = treat_idx[order]
@@ -39,14 +43,19 @@ function nn_match(D::AbstractVector, y::AbstractVector,
     used_ctrl = Set{Int}()
     pairs     = Tuple{Int,Int}[]
 
+    # Query enough neighbors to handle replacement filtering
+    k_query = replace ? k : min(n_c, k + 50)
+
     for ti in sorted_t
-        ps_ti = ps[ti]
-        dists = abs.(ps[control_idx] .- ps_ti)
-        order_c = sortperm(dists)
+        ps_ti = Float64.(reshape([ps[ti]], 1, 1))
+        idxs, dists = knn(tree, ps_ti, k_query)
+        nn_idxs = idxs[1]   # indices into control_idx
+        nn_dists = dists[1]  # distances
+
         matched = 0
-        for ci_pos in order_c
+        for (ci_pos, d) in zip(nn_idxs, nn_dists)
             ci = control_idx[ci_pos]
-            if dists[ci_pos] > cal; break; end
+            if d > cal; continue; end
             if !replace && ci in used_ctrl; continue; end
             push!(pairs, (ti, ci))
             push!(used_ctrl, ci)

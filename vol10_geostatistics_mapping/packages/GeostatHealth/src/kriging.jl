@@ -1,31 +1,5 @@
 # kriging.jl — Simple, Ordinary, and Universal Kriging
-
-using Statistics, LinearAlgebra
-
-# ── Covariance matrix from variogram model ────────────────────────────────────
-
-function _cov_matrix(vm::VariogramModel, coords::AbstractMatrix)
-    n = size(coords, 1)
-    C = zeros(n, n)
-    for i in 1:n, j in i:n
-        h   = sqrt(sum((coords[i,:] .- coords[j,:]).^2))
-        c   = covariance_value(vm, h)
-        C[i,j] = c; C[j,i] = c
-    end
-    C
-end
-
-function _cross_cov(vm::VariogramModel, coords::AbstractMatrix,
-                    new_coords::AbstractMatrix)
-    n_train = size(coords, 1)
-    n_new   = size(new_coords, 1)
-    C = zeros(n_train, n_new)
-    for i in 1:n_train, j in 1:n_new
-        h = sqrt(sum((coords[i,:] .- new_coords[j,:]).^2))
-        C[i,j] = covariance_value(vm, h)
-    end
-    C
-end
+# Backed by GeoStats.jl / GeoStatsModels.jl
 
 # ── Simple Kriging ────────────────────────────────────────────────────────────
 
@@ -39,7 +13,7 @@ struct SimpleKrigingResult
     coords  ::Matrix{Float64}
     z       ::Vector{Float64}
     μ       ::Float64
-    C_inv   ::Matrix{Float64}   # inverse covariance
+    C_inv   ::Matrix{Float64}   # inverse covariance (kept for API compat)
 end
 
 """
@@ -59,25 +33,32 @@ end
 """
     sk_predict(sk, new_coords) -> (z_hat, σ²_kriging)
 
-Predict at new locations using simple kriging.
-
-ẑ(x₀) = μ + c₀'C⁻¹(z - μ·1)
-σ²_SK(x₀) = C(0) - c₀'C⁻¹c₀
+Predict at new locations using simple kriging via GeoStats.jl.
 """
 function sk_predict(sk::SimpleKrigingResult, new_coords::AbstractMatrix)
+    gv = _to_geostats_variogram(sk.vm)
+
+    # Build georeferenced data
+    n = length(sk.z)
+    points_obs = [Meshes.Point(sk.coords[i,1], sk.coords[i,2]) for i in 1:n]
+    domain_obs = Meshes.PointSet(points_obs)
+    geotable   = GeoTables.georef((; Z = sk.z), domain_obs)
+
+    # Build prediction domain
     n_new = size(new_coords, 1)
+    points_new = [Meshes.Point(new_coords[j,1], new_coords[j,2]) for j in 1:n_new]
+    domain_new = Meshes.PointSet(points_new)
+
+    # Use GeoStatsModels Kriging
+    model = GeoStatsModels.Kriging(gv, sk.μ)
+    fitted = GeoStatsModels.fit(model, geotable)
+
     z_hat = zeros(n_new)
     σ²    = zeros(n_new)
-    c0    = covariance_value(sk.vm, 0.0)
-    r     = sk.z .- sk.μ  # residuals from mean
-
     for j in 1:n_new
-        c_vec = [covariance_value(sk.vm,
-                    sqrt(sum((sk.coords[i,:] .- new_coords[j,:]).^2)))
-                 for i in 1:size(sk.coords,1)]
-        λ = sk.C_inv * c_vec
-        z_hat[j] = sk.μ + dot(λ, r)
-        σ²[j]    = max(c0 - dot(λ, c_vec), 0.0)
+        μ_pred, σ²_pred = GeoStatsModels.predictprob(fitted, :Z, points_new[j])
+        z_hat[j] = μ_pred
+        σ²[j]    = max(σ²_pred, 0.0)
     end
     z_hat, σ²
 end
@@ -93,24 +74,18 @@ struct OrdinaryKrigingResult
     vm       ::VariogramModel
     coords   ::Matrix{Float64}
     z        ::Vector{Float64}
-    K_inv    ::Matrix{Float64}   # inverse of augmented system
+    K_inv    ::Matrix{Float64}   # inverse of augmented system (kept for API compat)
 end
 
 """
     ordinary_kriging(z, coords, vm) -> OrdinaryKrigingResult
 
-Fit ordinary kriging (OK). Solves the augmented system:
-
-  [C  1] [λ ]   [c₀]
-  [1' 0] [μ*] = [1 ]
-
-where μ* is the Lagrange multiplier ensuring Σλᵢ=1.
+Fit ordinary kriging (OK).
 """
 function ordinary_kriging(z::AbstractVector, coords::AbstractMatrix,
                             vm::VariogramModel)
     n = length(z)
     C = _cov_matrix(vm, coords)
-    # Augmented kriging system
     K     = [C ones(n); ones(1,n) 0.0]
     K_reg = K + 1e-10 * I
     K_inv = inv(K_reg)
@@ -120,25 +95,32 @@ end
 """
     ok_predict(ok, new_coords) -> (z_hat, σ²_kriging)
 
-Predict at new locations using ordinary kriging.
+Predict at new locations using ordinary kriging via GeoStats.jl.
 """
 function ok_predict(ok::OrdinaryKrigingResult, new_coords::AbstractMatrix)
-    n      = size(ok.coords, 1)
-    n_new  = size(new_coords, 1)
-    z_hat  = zeros(n_new)
-    σ²     = zeros(n_new)
-    c0     = covariance_value(ok.vm, 0.0)
+    gv = _to_geostats_variogram(ok.vm)
 
+    # Build georeferenced data
+    n = length(ok.z)
+    points_obs = [Meshes.Point(ok.coords[i,1], ok.coords[i,2]) for i in 1:n]
+    domain_obs = Meshes.PointSet(points_obs)
+    geotable   = GeoTables.georef((; Z = ok.z), domain_obs)
+
+    # Build prediction domain
+    n_new = size(new_coords, 1)
+    points_new = [Meshes.Point(new_coords[j,1], new_coords[j,2]) for j in 1:n_new]
+    domain_new = Meshes.PointSet(points_new)
+
+    # Use GeoStatsModels OrdinaryKriging
+    model = GeoStatsModels.Kriging(gv, nothing)
+    fitted = GeoStatsModels.fit(model, geotable)
+
+    z_hat = zeros(n_new)
+    σ²    = zeros(n_new)
     for j in 1:n_new
-        c_vec = [covariance_value(ok.vm,
-                    sqrt(sum((ok.coords[i,:] .- new_coords[j,:]).^2)))
-                 for i in 1:n]
-        rhs = vcat(c_vec, 1.0)
-        λ_μ = ok.K_inv * rhs
-        λ   = λ_μ[1:n]
-        μ_star = λ_μ[n+1]
-        z_hat[j] = dot(λ, ok.z)
-        σ²[j]    = max(c0 - dot(λ, c_vec) - μ_star, 0.0)
+        μ_pred, σ²_pred = GeoStatsModels.predictprob(fitted, :Z, points_new[j])
+        z_hat[j] = μ_pred
+        σ²[j]    = max(σ²_pred, 0.0)
     end
     z_hat, σ²
 end
@@ -155,7 +137,7 @@ struct UniversalKrigingResult
     coords ::Matrix{Float64}
     z      ::Vector{Float64}
     F      ::Matrix{Float64}   # trend matrix (n × p)
-    K_inv  ::Matrix{Float64}   # inverse of augmented UK system
+    K_inv  ::Matrix{Float64}   # inverse of augmented UK system (kept for API compat)
     degree ::Int               # polynomial degree (1 or 2)
 end
 
@@ -170,8 +152,6 @@ function universal_kriging(z::AbstractVector, coords::AbstractMatrix,
     F = _trend_matrix(coords, degree)
     p = size(F, 2)
     C = _cov_matrix(vm, coords)
-
-    # Augmented UK system: [C F; F' 0]
     K = [C F; F' zeros(p,p)]
     K_inv = inv(K + 1e-10 * I)
     UniversalKrigingResult(vm, Matrix{Float64}(coords), Float64.(z), F, K_inv, degree)
@@ -189,25 +169,33 @@ end
 
 """
     uk_predict(uk, new_coords) -> (z_hat, σ²_kriging)
+
+Predict at new locations using universal kriging via GeoStats.jl.
 """
 function uk_predict(uk::UniversalKrigingResult, new_coords::AbstractMatrix)
-    n      = size(uk.coords, 1)
-    n_new  = size(new_coords, 1)
-    p      = size(uk.F, 2)
-    z_hat  = zeros(n_new)
-    σ²     = zeros(n_new)
-    c0     = covariance_value(uk.vm, 0.0)
+    gv = _to_geostats_variogram(uk.vm)
 
+    # Build georeferenced data
+    n = length(uk.z)
+    points_obs = [Meshes.Point(uk.coords[i,1], uk.coords[i,2]) for i in 1:n]
+    domain_obs = Meshes.PointSet(points_obs)
+    geotable   = GeoTables.georef((; Z = uk.z), domain_obs)
+
+    # Build prediction domain
+    n_new = size(new_coords, 1)
+    points_new = [Meshes.Point(new_coords[j,1], new_coords[j,2]) for j in 1:n_new]
+    domain_new = Meshes.PointSet(points_new)
+
+    # Use GeoStatsModels with degree specification for universal kriging
+    model = GeoStatsModels.Kriging(gv, uk.degree)
+    fitted = GeoStatsModels.fit(model, geotable)
+
+    z_hat = zeros(n_new)
+    σ²    = zeros(n_new)
     for j in 1:n_new
-        c_vec = [covariance_value(uk.vm,
-                    sqrt(sum((uk.coords[i,:] .- new_coords[j,:]).^2)))
-                 for i in 1:n]
-        f0    = _trend_matrix(new_coords[j:j,:], uk.degree)[1,:]
-        rhs   = vcat(c_vec, f0)
-        λ_μ   = uk.K_inv * rhs
-        λ     = λ_μ[1:n]
-        z_hat[j] = dot(λ, uk.z)
-        σ²[j]    = max(c0 - dot(λ, c_vec), 0.0)
+        μ_pred, σ²_pred = GeoStatsModels.predictprob(fitted, :Z, points_new[j])
+        z_hat[j] = μ_pred
+        σ²[j]    = max(σ²_pred, 0.0)
     end
     z_hat, σ²
 end
@@ -257,4 +245,17 @@ function kriging_loo_cv(z::AbstractVector, coords::AbstractMatrix,
      picp_95  = mean(in_pi),
      mean_width= mean(widths),
      n        = n)
+end
+
+# ── Internal helpers ──────────────────────────────────────────────────────────
+
+function _cov_matrix(vm::VariogramModel, coords::AbstractMatrix)
+    n = size(coords, 1)
+    C = zeros(n, n)
+    for i in 1:n, j in i:n
+        h   = sqrt(sum((coords[i,:] .- coords[j,:]).^2))
+        c   = covariance_value(vm, h)
+        C[i,j] = c; C[j,i] = c
+    end
+    C
 end

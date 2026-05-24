@@ -20,6 +20,8 @@ Estimation:
 module InfectiousDisease
 
 using Statistics, LinearAlgebra, Random
+using OrdinaryDiffEq
+using Distributions: Poisson
 
 include("compartmental.jl")
 include("spatial_sir.jl")
