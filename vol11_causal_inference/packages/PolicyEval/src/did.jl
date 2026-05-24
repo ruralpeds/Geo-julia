@@ -1,4 +1,4 @@
-# did.jl — Difference-in-differences and event study estimators
+# did.jl — Difference-in-differences and event study estimators using GLM.jl
 
 struct DIDResult
     β_did::Float64        # ATT estimate
@@ -13,28 +13,14 @@ struct DIDResult
     estimator::Symbol    # :two_by_two or :twfe
 end
 
-# ── OLS helpers ───────────────────────────────────────────────────────────────
-
-function _ols(X::AbstractMatrix, y::AbstractVector)
-    (X'X + 1e-10*I) \ (X'y)
-end
-
-function _demean_within(X::AbstractMatrix, groups::AbstractVector)
-    Xd = copy(X)
-    for g in unique(groups)
-        idx = groups .== g
-        Xd[idx,:] .-= mean(X[idx,:], dims=1)
-    end
-    Xd
-end
-
-# ── 2×2 DiD ──────────────────────────────────────────────────────────────────
+# -- 2x2 DiD using GLM.jl -----------------------------------------------------
 
 """
     did_2x2(y, treat, post; unit_ids, n_boot, rng) -> DIDResult
 
-Classic 2×2 difference-in-differences:
-    β_DiD = (Ȳ₁₁ - Ȳ₁₀) - (Ȳ₀₁ - Ȳ₀₀)
+Classic 2x2 difference-in-differences via regression:
+    y = beta_0 + beta_1*treat + beta_2*post + beta_3*treat*post + eps
+beta_3 is the DiD ATT estimate.
 Clustered bootstrap SE by unit_ids.
 """
 function did_2x2(y::AbstractVector, treat::AbstractVector, post::AbstractVector;
@@ -42,19 +28,23 @@ function did_2x2(y::AbstractVector, treat::AbstractVector, post::AbstractVector;
                  n_boot::Int=200, rng=Random.default_rng())
     n   = length(y)
     D   = Float64.(treat); P = Float64.(post)
-    β_fn = (yv, dv, pv) -> begin
-        y11 = mean(yv[(dv.==1) .& (pv.==1)])
-        y10 = mean(yv[(dv.==1) .& (pv.==0)])
-        y01 = mean(yv[(dv.==0) .& (pv.==1)])
-        y00 = mean(yv[(dv.==0) .& (pv.==0)])
-        (y11 - y10) - (y01 - y00)
-    end
 
-    β    = β_fn(y, D, P)
+    # Fit DiD regression using GLM: y ~ treat * post
+    df = DataFrame(y=Float64.(y), treat=D, post=P, treat_post=D .* P)
+    model = lm(@formula(y ~ treat + post + treat_post), df)
+    β_did = coef(model)[4]  # coefficient on treat_post interaction
+
     n_t  = sum(D .== 1) ÷ max(1, length(unique(P)))  # approx units
     n_c  = sum(D .== 0) ÷ max(1, length(unique(P)))
 
-    # Cluster bootstrap by unit
+    # Cluster bootstrap by unit for proper SE
+    β_fn = (yv, dv, pv) -> begin
+        dfb = DataFrame(y=Float64.(yv), treat=Float64.(dv), post=Float64.(pv),
+                        treat_post=Float64.(dv) .* Float64.(pv))
+        mb = lm(@formula(y ~ treat + post + treat_post), dfb)
+        coef(mb)[4]
+    end
+
     units     = unique(unit_ids)
     boot_ests = Vector{Float64}(undef, n_boot)
     for b in 1:n_boot
@@ -64,15 +54,14 @@ function did_2x2(y::AbstractVector, treat::AbstractVector, post::AbstractVector;
     end
     se = std(boot_ests)
 
-    # Parallel trends: slope test on pre-period (if multiple pre periods)
-    DIDResult(β, se, β-1.96se, β+1.96se, n, n_t, n_c, 0.0, NaN, :two_by_two)
+    DIDResult(β_did, se, β_did-1.96se, β_did+1.96se, n, n_t, n_c, 0.0, NaN, :two_by_two)
 end
 
 """
     event_study(y, treat, time; treat_time, unit_ids, n_boot, rng) -> NamedTuple
 
-Event-study regression: y_{it} = Σ_τ β_τ·Dᵢ·𝟏(tᵢ=τ) + αᵢ + γₜ + εᵢₜ
-Returns β_τ (τ normalised to 0 at treatment - 1 period).
+Event-study regression: y_{it} = Sum_tau beta_tau*Di*1(ti=tau) + alpha_i + gamma_t + eps_it
+Returns beta_tau (tau normalised to 0 at treatment - 1 period).
 """
 function event_study(y::AbstractVector, treat::AbstractVector,
                      time::AbstractVector;
@@ -85,7 +74,6 @@ function event_study(y::AbstractVector, treat::AbstractVector,
     rel_time = time .- treat_time
 
     # TWFE within-demean: remove unit and time FE
-    # Stack: design matrix with relative-time dummies (omit τ=-1)
     rel_periods = sort(unique(rel_time))
     omit_t      = -1  # normalisation period
 
@@ -95,7 +83,7 @@ function event_study(y::AbstractVector, treat::AbstractVector,
         D_event[:, j] = Float64.(treat) .* Float64.(rel_time .== τ)
     end
 
-    # Within transform
+    # Within transform (demean by unit and time)
     unit_grp = [findfirst(==(u), units_v) for u in unit_ids]
     time_grp = [findfirst(==(t), periods)  for t in time]
 
@@ -124,10 +112,10 @@ function event_study(y::AbstractVector, treat::AbstractVector,
         ug      = [findfirst(==(unit_ids[i]), units_v) for i in idx]
         tg      = [findfirst(==(time[i]), periods)  for i in idx]
         for g in 1:length(units_v)
-            ii = ug .== g; XyB[ii,:] .-= mean(XyB[ii,:], dims=1)
+            ii = ug .== g; any(ii) && (XyB[ii,:] .-= mean(XyB[ii,:], dims=1))
         end
         for g in 1:length(periods)
-            ii = tg .== g; XyB[ii,:] .-= mean(XyB[ii,:], dims=1)
+            ii = tg .== g; any(ii) && (XyB[ii,:] .-= mean(XyB[ii,:], dims=1))
         end
         Xb = XyB[:,1:end-1]; yb = XyB[:,end]
         se_boot[:,b] = (Xb'Xb + 1e-10*I) \ (Xb'yb)
@@ -150,38 +138,12 @@ function parallel_trends_test(y, treat, time;
                       unit_ids=unit_ids, n_boot=n_boot, rng=rng)
     pre = es.rel_periods .< 0
     β_pre = es.β[pre]; se_pre = es.se[pre]
-    # Joint Wald: χ² = Σ (β/se)²
+    # Joint Wald: chi2 = Sum (beta/se)^2
     chi2 = sum((β_pre ./ max.(se_pre, 1e-10)).^2)
     df   = sum(pre)
-    # Chi-squared p-value via regularised incomplete gamma
-    p_val = 1.0 - _chi2_cdf(chi2, df)
+    # Chi-squared p-value using Distributions.jl
+    p_val = 1.0 - cdf(Chisq(df), chi2)
     (chi2=chi2, df=df, p_value=p_val, pre_betas=β_pre, pre_ses=se_pre)
-end
-
-# Minimal chi-squared CDF (from vol9 pattern)
-function _chi2_cdf(x, k)
-    x <= 0 && return 0.0
-    # regularized incomplete gamma P(k/2, x/2) via series
-    a = k / 2.0; z = x / 2.0
-    s = 1.0; term = 1.0
-    for n in 1:100
-        term *= z / (a + n)
-        s    += term
-        abs(term) < 1e-12 && break
-    end
-    p = exp(a * log(z) - z - _lgamma(a + 1.0)) * s
-    clamp(p, 0.0, 1.0)
-end
-
-function _lgamma(x)
-    # Lanczos approximation
-    g = 7; c = [0.99999999999980993,676.5203681218851,-1259.1392167224028,
-                771.32342877765313,-176.61502916214059,12.507343278686905,
-                -0.13857109526572012,9.9843695780195716e-6,1.5056327351493116e-7]
-    x < 0.5 && return log(π/sin(π*x)) - _lgamma(1-x)
-    x -= 1; a = c[1]; t = x + g + 0.5
-    for i in 2:length(c); a += c[i]/(x+i-1); end
-    0.5*log(2π) + (x+0.5)*log(t) - t + log(a)
 end
 
 """
@@ -206,7 +168,7 @@ function staggered_did(y::AbstractVector, treat_cohort::AbstractVector,
             pre_t   = periods[periods .< g]
             isempty(pre_t) && continue
             t_pre   = last(pre_t)
-            # 2×2 DiD: (treat_g, t) vs (treat_g, t_pre) minus (ctrl, t) vs (ctrl, t_pre)
+            # 2x2 DiD: (treat_g, t) vs (treat_g, t_pre) minus (ctrl, t) vs (ctrl, t_pre)
             y11 = mean(y[(treat_g) .& (time .== t)])
             y10 = mean(y[(treat_g) .& (time .== t_pre)])
             y01 = mean(y[(ctrl)   .& (time .== t)])

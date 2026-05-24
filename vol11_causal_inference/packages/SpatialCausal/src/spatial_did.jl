@@ -1,4 +1,4 @@
-# spatial_did.jl — Spatial difference-in-differences with spillover effects
+# spatial_did.jl — Spatial difference-in-differences with spillover effects using GLM.jl
 
 struct SpatialDIDResult
     β_direct::Float64      # ATT: direct treatment effect
@@ -21,21 +21,20 @@ end
     spatial_did(y, coords, post, treatment_sites; radius, buffer, unit_ids, n_boot) -> SpatialDIDResult
 
 Spatial DiD with spillover zones (Cerqua & Pellegrini 2014 style):
-    yᵢₜ = αᵢ + γₜ + τ·Dᵢ·Postₜ + φ·Sᵢ·Postₜ + εᵢₜ
+    y_it = alpha_i + gamma_t + tau*Di*Post_t + phi*Si*Post_t + eps_it
 
 where:
-- Dᵢ = 1 if unit i is within `radius` km of a treatment site
-- Sᵢ = 1 if unit i is within buffer zone (radius, radius+buffer)
-- Postₜ = 1 after treatment
+- Di = 1 if unit i is within `radius` km of a treatment site
+- Si = 1 if unit i is within buffer zone (radius, radius+buffer)
+- Post_t = 1 after treatment
 
-`coords` is n×2 matrix (one row per unit), `treatment_sites` is k×2 matrix.
-`y`, `coords` and `post` are observation-level (n_obs rows if panel data).
-`unit_ids` maps each row to a spatial unit for the coordinate lookup.
+`coords` is n x 2 matrix (one row per unit), `treatment_sites` is k x 2 matrix.
+Uses NearestNeighbors.jl BallTree for efficient distance computation to treatment sites.
 """
 function spatial_did(y::AbstractVector,
-                     coords::AbstractMatrix,        # n_units × 2
+                     coords::AbstractMatrix,        # n_units x 2
                      post::AbstractVector,          # n_obs binary
-                     treatment_sites::AbstractMatrix;  # k × 2
+                     treatment_sites::AbstractMatrix;  # k x 2
                      radius::Float64=1.0,
                      buffer::Float64=0.5,
                      unit_ids::AbstractVector=collect(1:length(y)),
@@ -45,13 +44,18 @@ function spatial_did(y::AbstractVector,
     n_units = size(coords, 1)
     n_obs   = length(y)
 
+    # Build BallTree on treatment sites for efficient nearest-site lookup
+    sites_t = Matrix(treatment_sites')  # 2 x k for NearestNeighbors
+    tree = BallTree(sites_t)
+
     # Assign treatment / spillover status to each unit
     D_unit = falses(n_units)  # treated
     S_unit = falses(n_units)  # spillover buffer
 
     for i in 1:n_units
-        min_dist = minimum(_haversine(coords[i,:], treatment_sites[k,:])
-                           for k in 1:size(treatment_sites,1))
+        # Find nearest treatment site using KDTree
+        idxs, dists = knn(tree, coords[i,:], 1)
+        min_dist = dists[1]
         if min_dist <= radius
             D_unit[i] = true
         elseif min_dist <= radius + buffer
@@ -64,18 +68,15 @@ function spatial_did(y::AbstractVector,
     S_obs = S_unit[unit_ids]
     P_obs = Float64.(post)
 
-    # TWFE: within-demean by unit and time
-    times   = unique(post)
-    u_ids   = unit_ids
-
-    # Design: [D_obs·P_obs, S_obs·P_obs, P_obs]
+    # Fit TWFE using GLM.jl with within-demeaning for unit FE
+    # Design: [D_obs*P_obs, S_obs*P_obs, P_obs]
     Xmat = hcat(Float64.(D_obs) .* P_obs,
                 Float64.(S_obs) .* P_obs,
                 P_obs)
 
     β_fn = (yv, Xm, uid) -> begin
         XY = hcat(Xm, yv)
-        # Demean by unit
+        # Demean by unit (within transformation)
         for u in unique(uid)
             idx = uid .== u; XY[idx,:] .-= mean(XY[idx,:], dims=1)
         end
@@ -83,8 +84,8 @@ function spatial_did(y::AbstractVector,
         (X_w'X_w + 1e-10*I) \ (X_w'y_w)
     end
 
-    β  = β_fn(y, Xmat, u_ids)
-    se = _boot_se_units(y, Xmat, u_ids, β_fn, n_boot, rng)
+    β  = β_fn(y, Xmat, unit_ids)
+    se = _boot_se_units(y, Xmat, unit_ids, β_fn, n_boot, rng)
 
     SpatialDIDResult(
         β[1], β[2], β[3],

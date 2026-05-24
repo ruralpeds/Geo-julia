@@ -1,6 +1,7 @@
 module PolicyEval
 
 using Statistics, LinearAlgebra, Random
+using GLM, Distributions, StatsBase, DataFrames, Optim
 
 include("did.jl")
 include("synth_control.jl")

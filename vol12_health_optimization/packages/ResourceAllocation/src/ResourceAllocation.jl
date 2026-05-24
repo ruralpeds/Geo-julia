@@ -1,6 +1,7 @@
 module ResourceAllocation
 
 using Statistics, LinearAlgebra, Random
+using JuMP, HiGHS
 
 include("branch_bound.jl")
 include("stochastic.jl")

@@ -1,0 +1,141 @@
+name: Performance Benchmarks
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "vol*/packages/*/src/**"
+      - "benchmarks/**"
+      - ".github/workflows/benchmarks.yml"
+  pull_request:
+    paths:
+      - "vol*/packages/*/src/**"
+      - "benchmarks/**"
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  benchmark:
+    name: Benchmark — Julia ${{ matrix.julia-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        julia-version: ["1.11"]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: ${{ matrix.julia-version }}
+
+      - uses: julia-actions/cache@v2
+
+      - name: Install benchmark dependencies
+        run: julia --project=benchmarks -e 'import Pkg; Pkg.instantiate()'
+
+      - name: Restore baseline
+        uses: actions/cache@v4
+        with:
+          path: benchmarks/results/baseline.json
+          key: benchmark-baseline-${{ runner.os }}-${{ matrix.julia-version }}
+
+      - name: Run benchmarks
+        run: |
+          if [ -f benchmarks/results/baseline.json ]; then
+            julia --project=benchmarks benchmarks/src/runner.jl --compare
+          else
+            julia --project=benchmarks benchmarks/src/runner.jl --save
+          fi
+        timeout-minutes: 30
+
+      - name: Upload benchmark results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: benchmark-results-${{ matrix.julia-version }}
+          path: benchmarks/results/bench_*.json
+          retention-days: 90
+
+      - name: Comment on PR with results
+        if: github.event_name == 'pull_request' && always()
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const path = require('path');
+            const resultsDir = 'benchmarks/results';
+            const files = fs.readdirSync(resultsDir).filter(f => f.startsWith('bench_') && f.endsWith('.json'));
+            if (files.length === 0) return;
+
+            const latest = files.sort().pop();
+            const data = JSON.parse(fs.readFileSync(path.join(resultsDir, latest), 'utf8'));
+
+            const formatTime = (ns) => {
+              if (ns < 1000) return `${ns.toFixed(1)} ns`;
+              if (ns < 1e6) return `${(ns/1e3).toFixed(1)} μs`;
+              if (ns < 1e9) return `${(ns/1e6).toFixed(2)} ms`;
+              return `${(ns/1e9).toFixed(3)} s`;
+            };
+            const formatMem = (b) => {
+              if (b < 1024) return `${b} B`;
+              if (b < 1024**2) return `${(b/1024).toFixed(1)} KiB`;
+              return `${(b/1024**2).toFixed(1)} MiB`;
+            };
+
+            let body = `## Performance Benchmarks\n\n`;
+            body += `Julia ${data.julia_version} — ${data.timestamp}\n\n`;
+            body += `| Benchmark | Median | Memory | Allocs | N |\n`;
+            body += `|-----------|--------|--------|--------|---|\n`;
+            for (const e of data.entries) {
+              body += `| ${e.name} | ${formatTime(e.median_ns)} | ${formatMem(e.memory_bytes)} | ${e.allocs} | ${e.n_input} |\n`;
+            }
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+            });
+            const existing = comments.find(c => c.body.includes('## Performance Benchmarks'));
+            if (existing) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: existing.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body,
+              });
+            }
+
+  benchmark-save-baseline:
+    name: Save baseline (main only)
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: benchmark
+    steps:
+      - uses: actions/checkout@v4
+      - uses: julia-actions/setup-julia@v2
+        with:
+          version: "1.11"
+      - uses: julia-actions/cache@v2
+
+      - name: Install & run with --save
+        run: |
+          julia --project=benchmarks -e 'import Pkg; Pkg.instantiate()'
+          julia --project=benchmarks benchmarks/src/runner.jl --save
+        timeout-minutes: 30
+
+      - name: Cache baseline
+        uses: actions/cache/save@v4
+        with:
+          path: benchmarks/results/baseline.json
+          key: benchmark-baseline-${{ runner.os }}-1.11

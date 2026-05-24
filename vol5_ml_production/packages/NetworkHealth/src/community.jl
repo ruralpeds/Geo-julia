@@ -1,10 +1,12 @@
 # community.jl — Community detection for provider referral networks
 # Chapter 36.3
+#
+# Uses Graphs.jl label_propagation; keeps custom Louvain (not in Graphs.jl).
 
 """
     label_propagation(g; max_iter=100, rng=GLOBAL_RNG) -> Vector{Int}
 
-Raghavan et al. (2007) Label Propagation Algorithm.
+Label Propagation community detection using Graphs.jl's built-in implementation.
 Each node adopts the most frequent label among its neighbors.
 Fast O(E) algorithm; non-deterministic.
 
@@ -13,30 +15,19 @@ Returns community labels (1-indexed integers).
 function label_propagation(g::ReferralNetwork;
                             max_iter::Int = 100,
                             rng::AbstractRNG = Random.GLOBAL_RNG)
-    n      = g.n
-    labels = collect(1:n)
-    order  = randperm(rng, n)
-
-    for _ in 1:max_iter
-        changed = false
-        shuffle!(rng, order)
-        for v in order
-            nbrs = union(g.adj[v, :].nzind, g.adj[:, v].nzind)
-            isempty(nbrs) && continue
-            # Count weighted label frequency
-            label_count = Dict{Int,Float64}()
-            for u in nbrs
-                wt = g.adj[v,u] + g.adj[u,v]
-                label_count[labels[u]] = get(label_count, labels[u], 0.0) + max(wt, 1.0)
-            end
-            best = argmax(label_count)
-            if labels[v] != best
-                labels[v] = best
-                changed   = true
-            end
+    # Build a simple graph (undirected) for community detection
+    sg = Graphs.SimpleGraph(g.n)
+    for i in 1:g.n
+        for j in g.adj[i, :].nzind
+            Graphs.add_edge!(sg, i, j)
         end
-        !changed && break
+        for j in g.adj[:, i].nzind
+            Graphs.add_edge!(sg, i, j)
+        end
     end
+
+    # Graphs.jl label_propagation returns (labels, convergence_info)
+    labels = Graphs.label_propagation(sg; maxiter=max_iter)[1]
 
     # Re-index communities to 1..K
     unique_labels = sort(unique(labels))
@@ -96,7 +87,6 @@ function louvain_communities(g::ReferralNetwork;
                 c == curr_c && continue
                 K_c  = get(comm_k, c, 0.0)
                 K_cc = get(comm_k, curr_c, 0.0)
-                # ΔQ = [w_to_c - k_v·K_c·resolution/m2] - [w_curr - k_v·(K_cc-k_v)·resolution/m2]
                 dQ = (w_to_c  - resolution * k_v * K_c  / m2) -
                      (w_curr  - resolution * k_v * (K_cc - k_v) / m2)
                 if dQ > best_dQ

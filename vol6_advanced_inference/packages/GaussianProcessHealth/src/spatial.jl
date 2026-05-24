@@ -85,4 +85,3 @@ function leave_one_out_cv(kernel   ::GPKernel,
 end
 
 using Distributions: Normal, ccdf
-using LinearAlgebra: diag, I, norm

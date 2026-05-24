@@ -16,6 +16,8 @@ Methods:
 module HealthIntelligence
 
 using Statistics, LinearAlgebra, Random
+using StatsBase: zscore
+import Distributions
 
 include("risk_scoring.jl")
 include("anomaly.jl")

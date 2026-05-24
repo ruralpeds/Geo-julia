@@ -42,7 +42,7 @@ end
 @testset "Stochastic SIR" begin
     r = sir_stochastic(5000, 5, 0.3, 0.1; t_end=180.0, dt=1.0,
                         rng=MersenneTwister(1))
-    @test all(r.S .+ r.I .+ r.R .≈ 1.0 .± 0.01)
+    @test all(abs.(r.S .+ r.I .+ r.R .- 1.0) .< 0.01)
     @test r.R₀ ≈ 3.0 atol=1e-8
     # No negative compartments
     @test all(r.S .>= -1e-6)

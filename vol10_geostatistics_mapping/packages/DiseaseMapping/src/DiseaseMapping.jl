@@ -1,7 +1,8 @@
 """
     DiseaseMapping
 
-Pure-Julia Bayesian disease mapping for spatial epidemiology.
+Bayesian disease mapping for spatial epidemiology, using Distributions.jl
+for statistical distributions.
 
 Exports: smr, batch_smr, smr_summary, SMRResult, indirect_standardise;
 build_adjacency, bym_fit, BYMResult, rand_gamma;
@@ -12,6 +13,7 @@ disease_mapping_report, DiseaseMappingReport, print_disease_mapping_report
 module DiseaseMapping
 
 using Statistics, LinearAlgebra, Random
+using Distributions
 
 include("smr.jl")
 include("bym.jl")

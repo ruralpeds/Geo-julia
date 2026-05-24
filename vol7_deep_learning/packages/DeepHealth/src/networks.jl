@@ -1,4 +1,4 @@
-# networks.jl — Network architectures for DeepHealth
+# networks.jl — Network architectures for DeepHealth (Flux-backed)
 # Chapter 45 — Open-Source Healthcare GIS Textbook in Julia
 
 # ── Multi-Layer Perceptron ────────────────────────────────────────────────────
@@ -8,6 +8,7 @@
 
 Standard feed-forward neural network with configurable depth/width.
 Used as baseline for healthcare access prediction tasks.
+Internally uses a Flux.Chain for differentiable forward passes.
 """
 struct MLP
     layers      :: Vector{Dense}
@@ -181,7 +182,7 @@ function forward(tb::TabNetBlock, x::AbstractMatrix)
         # Attention logits: n_features × batch
         h_attn = tb.attn_W * (x .* prior_scales)
         # Sparsemax-like: use softmax as approximation
-        mask = softmax(h_attn)
+        mask = Flux.softmax(h_attn; dims=1)
         # Update prior to penalise reuse
         prior_scales = prior_scales .* (tb.gamma .- mask)
         # Feature selection

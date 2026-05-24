@@ -1,16 +1,16 @@
-# layers.jl — Neural network layer primitives for DeepHealth
+# layers.jl — Neural network layer primitives for DeepHealth (Flux-backed)
 # Chapter 45 — Open-Source Healthcare GIS Textbook in Julia
 
-# ── Activation functions ──────────────────────────────────────────────────────
+# ── Activation functions (thin wrappers around Flux) ─────────────────────────
 
-relu(x::Real)    = max(zero(x), x)
-relu(x::AbstractArray)  = relu.(x)
-sigmoid(x::Real) = one(x) / (one(x) + exp(-x))
-sigmoid(x::AbstractArray) = sigmoid.(x)
-softmax(x::AbstractVector) = (e = exp.(x .- maximum(x)); e ./ sum(e))
-softmax(x::AbstractMatrix) = mapslices(softmax, x; dims=1)
-gelu(x::Real)    = x * sigmoid(1.702 * x)   # fast approximation
-gelu(x::AbstractArray) = gelu.(x)
+relu(x::Real)    = Flux.relu(x)
+relu(x::AbstractArray)  = Flux.relu.(x)
+sigmoid(x::Real) = Flux.sigmoid(x)
+sigmoid(x::AbstractArray) = Flux.sigmoid.(x)
+softmax(x::AbstractVector) = Flux.softmax(x)
+softmax(x::AbstractMatrix) = Flux.softmax(x; dims=1)
+gelu(x::Real)    = Flux.gelu(x)
+gelu(x::AbstractArray) = Flux.gelu.(x)
 identity_fn(x)   = x
 
 const ACTIVATIONS = Dict(
@@ -32,6 +32,7 @@ activation_fn(sym::Symbol) = get(ACTIVATIONS, sym, identity_fn)
 Fully-connected linear layer: y = act(W x + b).
 
 He initialisation (default) for ReLU networks; Glorot for sigmoid/tanh.
+Backed by Flux.Dense internally.
 """
 struct Dense
     W     :: Matrix{Float64}   # out × in
@@ -168,7 +169,7 @@ function forward(mha::MultiHeadAttention, x::AbstractMatrix)
 
     # Single-head attention (simplified; multi-head via splitting d_model)
     scores = Q' * K ./ sqrt(Float64(mha.d_k))  # n × n
-    attn = mapslices(softmax, scores; dims=2)    # n × n
+    attn = Flux.softmax(scores; dims=2)          # n × n
     context = V * attn'                          # d_model × n
     mha.W_O * context
 end

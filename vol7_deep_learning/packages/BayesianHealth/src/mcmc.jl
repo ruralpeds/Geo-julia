@@ -1,10 +1,9 @@
-# mcmc.jl — MCMC samplers for BayesianHealth
+# mcmc.jl — MCMC samplers for BayesianHealth (Turing.jl backend)
 # Chapter 46 — Open-Source Healthcare GIS Textbook in Julia
 #
-# Implements:
-# 1. Metropolis-Hastings (random-walk proposal)
-# 2. Hamiltonian Monte Carlo (HMC) with leapfrog integrator
-# 3. Chains data structure with R-hat and ESS diagnostics
+# Wraps Turing.jl samplers (MH, HMC) behind the same public API:
+#   MetropolisHastings, HMCSampler, Chains, sample_chains,
+#   r_hat, ess, chain_summary
 
 # ── Chains data structure ─────────────────────────────────────────────────────
 
@@ -13,6 +12,9 @@
 
 Stores MCMC samples from one or more chains.
 Shape: n_iter × n_params × n_chains
+
+Internally uses `MCMCChains` and `MCMCDiagnosticTools` for convergence
+diagnostics while preserving the original field-access pattern.
 """
 struct Chains
     samples      :: Array{Float64, 3}   # iter × params × chains
@@ -29,66 +31,62 @@ function post_warmup(c::Chains)
     c.samples[c.n_warmup+1:end, :, :]
 end
 
+"""
+    _to_mcmcchains(c::Chains) -> MCMCChains.Chains
+
+Convert post-warmup samples to an MCMCChains.Chains object for diagnostics.
+"""
+function _to_mcmcchains(c::Chains)
+    draws = post_warmup(c)
+    MCMCChains.Chains(draws, Symbol.(c.param_names))
+end
+
 # ── R-hat convergence diagnostic ─────────────────────────────────────────────
 
 """
     r_hat(chains) -> Vector{Float64}
 
-Gelman-Rubin R-hat per parameter (Gelman & Rubin 1992).
-R-hat ≈ 1 indicates convergence; < 1.1 generally acceptable.
-
-R̂ = √(((N-1)/N · W + B/N) / W)
-where B = between-chain variance, W = within-chain variance.
+Gelman-Rubin R-hat per parameter.
+Delegates to MCMCDiagnosticTools.rhat via MCMCChains.
 """
 function r_hat(c::Chains)
-    draws = post_warmup(c)   # iter × params × chains
-    n, p, m = size(draws)
+    draws = post_warmup(c)
+    _, p, m = size(draws)
 
-    r̂ = zeros(p)
-    for j in 1:p
-        chain_means = vec(mean(draws[:, j, :]; dims=1))   # m
-        grand_mean  = mean(chain_means)
-
-        B = n / (m - 1) * sum((chain_means .- grand_mean).^2)
-        W = mean(var(draws[:, j, :]; dims=1))
-
-        var_hat = (n-1)/n * W + B/n
-        r̂[j] = sqrt(var_hat / max(W, 1e-12))
+    if m < 2
+        return ones(p)
     end
-    r̂
+
+    # Use MCMCDiagnosticTools.rhat on each parameter
+    # rhat expects a matrix of shape (n_draws, n_chains)
+    rhat_vals = Float64[]
+    for j in 1:p
+        param_draws = draws[:, j, :]  # n_draws × n_chains
+        rh = MCMCDiagnosticTools.rhat(param_draws)
+        push!(rhat_vals, rh)
+    end
+    rhat_vals
 end
 
 """
     ess(chains) -> Vector{Float64}
 
-Effective sample size per parameter via autocorrelation.
-ESS = N / (1 + 2·Σ_k ρ_k)   (Geyer 1992)
+Effective sample size per parameter.
+Delegates to MCMCDiagnosticTools.ess.
 """
 function ess(c::Chains)
     draws = post_warmup(c)
-    n, p, m = size(draws)
-    all_draws = reshape(draws, n*m, p)   # pool chains
+    _, p, m = size(draws)
 
-    ess_vec = zeros(p)
+    ess_vals = Float64[]
     for j in 1:p
-        s = all_draws[:, j]
-        n_s = length(s)
-        μ  = mean(s)
-        c0 = var(s)
-        if c0 < 1e-12
-            ess_vec[j] = n_s
-            continue
-        end
-        # Sum autocorrelations until negative pair
-        rho_sum = 0.0
-        for lag in 1:div(n_s, 2)
-            rho = sum((s[1:end-lag] .- μ) .* (s[lag+1:end] .- μ)) / (n_s * c0)
-            abs(rho) < 0.05 && break
-            rho_sum += rho
-        end
-        ess_vec[j] = n_s / max(1 + 2*rho_sum, 1.0)
+        param_draws = draws[:, j, :]  # n_draws × n_chains
+        # MCMCDiagnosticTools.ess returns a named tuple or vector
+        e = MCMCDiagnosticTools.ess(param_draws)
+        # Handle both scalar and vector returns
+        push!(ess_vals, Float64(first(e)))
     end
-    ess_vec
+    ess_vals
 end
 
 """
@@ -117,15 +115,13 @@ function chain_summary(c::Chains)
     )
 end
 
-# ── Metropolis-Hastings sampler ───────────────────────────────────────────────
+# ── Sampler config structs (API-compatible) ──────────────────────────────────
 
 """
     MetropolisHastings
 
-Random-walk Metropolis-Hastings sampler.
-Proposal: θ* ~ N(θ, σ²_prop · I)
-Acceptance: α = min(1, p(θ*)q(θ|θ*) / p(θ)q(θ*|θ))
-For symmetric Gaussian proposal: α = min(1, exp(log_p(θ*) - log_p(θ)))
+Random-walk Metropolis-Hastings sampler configuration.
+Internally mapped to `Turing.MH()`.
 """
 struct MetropolisHastings
     step_size    :: Float64
@@ -136,60 +132,11 @@ end
 MetropolisHastings(; step_size=0.1, adapt_steps=100, target_rate=0.234) =
     MetropolisHastings(step_size, adapt_steps, target_rate)
 
-function _mh_chain(
-    sampler  :: MetropolisHastings,
-    log_p    :: Function,
-    θ0       :: AbstractVector,
-    n_iter   :: Int,
-    n_warmup :: Int;
-    rng      = Random.GLOBAL_RNG,
-)
-    dim = length(θ0)
-    θ = copy(θ0)
-    lp = log_p(θ)
-    step = sampler.step_size
-
-    samples  = zeros(n_iter, dim)
-    lp_trace = zeros(n_iter)
-    n_accept = 0
-
-    for t in 1:n_iter
-        # Propose
-        θ_prop = θ .+ step .* randn(rng, dim)
-        lp_prop = log_p(θ_prop)
-
-        # Accept/reject
-        if log(rand(rng)) < lp_prop - lp
-            θ = θ_prop
-            lp = lp_prop
-            n_accept += 1
-        end
-
-        samples[t, :] = θ
-        lp_trace[t]   = lp
-
-        # Dual-averaging step size adaptation during warmup
-        if t <= sampler.adapt_steps
-            rate = n_accept / t
-            step *= exp(0.05 * (rate - sampler.target_rate))
-            step  = clamp(step, 1e-6, 10.0)
-        end
-    end
-
-    samples, lp_trace, n_accept / n_iter
-end
-
-# ── HMC sampler ───────────────────────────────────────────────────────────────
-
 """
     HMCSampler
 
-Hamiltonian Monte Carlo with leapfrog integration (Neal 2011).
-Algorithm:
-  1. Sample momentum p ~ N(0, M)   (M = mass matrix, default = I)
-  2. Leapfrog L steps of size ε
-  3. Accept/reject via Metropolis criterion on H = U + K
-     where U = -log p(θ), K = ½ p'M⁻¹p
+Hamiltonian Monte Carlo sampler configuration.
+Internally mapped to `Turing.HMC()`.
 """
 struct HMCSampler
     step_size    :: Float64   # ε
@@ -201,101 +148,26 @@ end
 HMCSampler(; step_size=0.05, n_leapfrog=10, adapt_steps=100, target_rate=0.65) =
     HMCSampler(step_size, n_leapfrog, adapt_steps, target_rate)
 
-"""
-    _grad_U(log_p, θ; h) -> Vector{Float64}
+# ── Turing model wrapper for raw log-probability functions ───────────────────
 
-Gradient of potential energy U(θ) = -log p(θ) via central differences.
 """
-function _grad_U(log_p::Function, θ::AbstractVector; h::Float64=1e-5)
-    dim  = length(θ)
-    grad = zeros(dim)
-    for i in 1:dim
-        θp = copy(θ); θp[i] += h
-        θm = copy(θ); θm[i] -= h
-        grad[i] = -(log_p(θp) - log_p(θm)) / (2h)
-    end
-    grad
+Wraps a raw `log_p(θ)::Function` into a Turing-compatible `@model` so that
+we can leverage Turing's sampling infrastructure while preserving the user's
+plain log-probability function interface.
+"""
+Turing.@model function _generic_logp_model(log_p, dim)
+    θ ~ filldist(Flat(), dim)
+    Turing.@addlogprob! log_p(θ)
 end
 
-"""
-    _leapfrog(log_p, θ, p, ε, L) -> (θ_new, p_new)
-
-L leapfrog steps with step size ε.
-"""
-function _leapfrog(log_p::Function, θ::AbstractVector, p::AbstractVector,
-                   ε::Float64, L::Int)
-    θ_new = copy(θ); p_new = copy(p)
-    # Half step for momentum
-    p_new .-= 0.5 .* ε .* _grad_U(log_p, θ_new)
-    for _ in 1:L
-        θ_new .+= ε .* p_new
-        if _ < L
-            p_new .-= ε .* _grad_U(log_p, θ_new)
-        end
-    end
-    # Final half step
-    p_new .-= 0.5 .* ε .* _grad_U(log_p, θ_new)
-    θ_new, p_new
-end
-
-function _hmc_chain(
-    sampler  :: HMCSampler,
-    log_p    :: Function,
-    θ0       :: AbstractVector,
-    n_iter   :: Int,
-    n_warmup :: Int;
-    rng      = Random.GLOBAL_RNG,
-)
-    dim = length(θ0)
-    θ = copy(θ0)
-    ε = sampler.step_size
-
-    samples  = zeros(n_iter, dim)
-    lp_trace = zeros(n_iter)
-    n_accept = 0
-
-    for t in 1:n_iter
-        # Sample momentum
-        p = randn(rng, dim)
-
-        # Current Hamiltonian: H = U + K
-        U_curr = -log_p(θ)
-        K_curr = 0.5 * dot(p, p)
-
-        # Leapfrog
-        θ_prop, p_prop = _leapfrog(log_p, θ, p, ε, sampler.n_leapfrog)
-
-        U_prop = -log_p(θ_prop)
-        K_prop = 0.5 * dot(p_prop, p_prop)
-
-        # Metropolis accept/reject
-        ΔH = (U_prop + K_prop) - (U_curr + K_curr)
-        if log(rand(rng)) < -ΔH
-            θ = θ_prop
-            n_accept += 1
-        end
-
-        samples[t, :] = θ
-        lp_trace[t]   = log_p(θ)
-
-        # Adapt step size during warmup
-        if t <= sampler.adapt_steps
-            rate = n_accept / t
-            ε *= exp(0.1 * (rate - sampler.target_rate))
-            ε  = clamp(ε, 1e-6, 1.0)
-        end
-    end
-
-    samples, lp_trace, n_accept / n_iter
-end
-
-# ── sample_chains: run multiple chains ───────────────────────────────────────
+# ── sample_chains: run multiple chains via Turing ────────────────────────────
 
 """
     sample_chains(sampler, log_p, θ0; n_iter, n_warmup, n_chains, rng) -> Chains
 
-Run `n_chains` parallel MCMC chains.  Each chain is initialised by adding
-small noise to `θ0`.  Returns a `Chains` object with convergence diagnostics.
+Run `n_chains` MCMC chains using Turing.jl as the backend.
+Each chain is initialised by adding small noise to `θ0`.
+Returns a `Chains` object with convergence diagnostics.
 """
 function sample_chains(
     sampler  :: Union{MetropolisHastings, HMCSampler},
@@ -312,21 +184,74 @@ function sample_chains(
         param_names = ["θ$(i)" for i in 1:dim]
     end
 
+    # Map our sampler configs to Turing samplers
+    turing_sampler = if sampler isa MetropolisHastings
+        # Use default Turing.MH() — it sets up a symmetric random walk proposal
+        Turing.MH()
+    else
+        Turing.HMC(sampler.step_size, sampler.n_leapfrog)
+    end
+
+    model = _generic_logp_model(log_p, dim)
+
     all_samples  = zeros(n_iter, dim, n_chains)
     all_lp       = zeros(n_iter, n_chains)
     accept_rates = zeros(n_chains)
 
-    for c in 1:n_chains
-        # Perturb starting point for each chain
+    for c_idx in 1:n_chains
+        # Perturbed initial point
         θ_init = θ0 .+ 0.1 .* randn(rng, dim)
 
-        chain_fn = sampler isa MetropolisHastings ?
-            _mh_chain : _hmc_chain
+        # Sample using Turing — request total n_iter samples, then
+        # warmup is handled post-hoc (our Chains struct tracks n_warmup)
+        local turing_chain
+        try
+            turing_chain = Turing.sample(
+                rng, model, turing_sampler, n_iter;
+                initial_params=θ_init, progress=false,
+                discard_initial=0,
+            )
+        catch
+            # Fallback without initial_params if not supported
+            turing_chain = Turing.sample(
+                rng, model, turing_sampler, n_iter;
+                progress=false, discard_initial=0,
+            )
+        end
 
-        s, lp, ar = chain_fn(sampler, log_p, θ_init, n_iter, n_warmup; rng=rng)
-        all_samples[:, :, c] = s
-        all_lp[:, c]         = lp
-        accept_rates[c]      = ar
+        # Extract samples from the Turing chain
+        for i in 1:dim
+            param_sym = Symbol("θ[$i]")
+            col = Array(turing_chain[param_sym])
+            n_available = min(length(col), n_iter)
+            all_samples[1:n_available, i, c_idx] = col[1:n_available]
+            if n_available < n_iter
+                all_samples[n_available+1:end, i, c_idx] .= col[end]
+            end
+        end
+
+        # Extract log probabilities
+        lp_col = try
+            vec(Array(turing_chain[:lp]))
+        catch
+            Float64[log_p(all_samples[t, :, c_idx]) for t in 1:n_iter]
+        end
+        n_lp = min(length(lp_col), n_iter)
+        all_lp[1:n_lp, c_idx] = lp_col[1:n_lp]
+        if n_lp < n_iter
+            all_lp[n_lp+1:end, c_idx] .= lp_col[end]
+        end
+
+        # Acceptance rate
+        accept_rates[c_idx] = try
+            mean(turing_chain[:acceptance_rate])
+        catch
+            # Estimate from unique consecutive samples
+            1.0 - mean(
+                all(all_samples[t, :, c_idx] .== all_samples[t-1, :, c_idx])
+                for t in 2:n_iter
+            )
+        end
     end
 
     Chains(all_samples, all_lp, n_warmup, param_names, accept_rates)

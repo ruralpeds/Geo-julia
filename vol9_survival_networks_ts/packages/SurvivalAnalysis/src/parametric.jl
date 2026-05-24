@@ -1,5 +1,5 @@
 # parametric.jl — Parametric AFT survival models
-# Weibull, Exponential, Log-logistic MLE
+# Weibull, Exponential, Log-logistic MLE using Distributions.jl + Optim.jl
 
 using Statistics, LinearAlgebra
 
@@ -25,20 +25,22 @@ struct ParametricModel
     converged    ::Bool
 end
 
-# ── Log-likelihoods ───────────────────────────────────────────────────────────
+# ── Log-likelihoods using Distributions.jl ───────────────────────────────────
 
 function _weibull_loglik(β, log_σ, times, status, X)
     σ   = exp(log_σ)
     μ   = X * β
     w   = (log.(times) .- μ) ./ σ   # standardised log-time
+    # Gumbel (minimum) distribution for AFT error
+    gumbel = Distributions.Gumbel(0.0, 1.0)
     ll  = 0.0
     for i in eachindex(times)
         if status[i] == 1
-            # PDF of Weibull AFT: f(t) = (1/σt) φ(w) where φ is Gumbel
-            ll += -log(σ) - log(times[i]) + w[i] - exp(w[i])
+            # log f(t) = -log(σ) - log(t) + logpdf(Gumbel, w)
+            ll += -log(σ) - log(times[i]) + Distributions.logpdf(gumbel, w[i])
         else
-            # Survival: S(t) = exp(-exp(w))
-            ll += -exp(w[i])
+            # log S(t) = logccdf(Gumbel, w) = -exp(w)
+            ll += Distributions.logccdf(gumbel, w[i])
         end
     end
     ll
@@ -48,14 +50,16 @@ function _loglogistic_loglik(β, log_σ, times, status, X)
     σ   = exp(log_σ)
     μ   = X * β
     w   = (log.(times) .- μ) ./ σ
+    # Logistic distribution for AFT error in log-logistic model
+    logistic_d = Distributions.Logistic(0.0, 1.0)
     ll  = 0.0
     for i in eachindex(times)
-        lS = -log1p(exp(w[i]))   # log S(t) = -log(1+exp(w))
         if status[i] == 1
-            # log f(t) = log(1/σt) + w - 2log(1+exp(w))
-            ll += -log(σ) - log(times[i]) + w[i] + 2*lS
+            # log f(t) = -log(σ) - log(t) + logpdf(Logistic, w)
+            ll += -log(σ) - log(times[i]) + Distributions.logpdf(logistic_d, w[i])
         else
-            ll += lS
+            # log S(t) = logccdf(Logistic, w)
+            ll += Distributions.logccdf(logistic_d, w[i])
         end
     end
     ll
@@ -66,35 +70,12 @@ function _exponential_loglik(β, times, status, X)
     _weibull_loglik(β, 0.0, times, status, X)
 end
 
-# ── Gradient via finite differences ──────────────────────────────────────────
-
-function _aft_grad_hess(ll_fn, θ; h=1e-5)
-    p    = length(θ)
-    g    = zeros(p)
-    H    = zeros(p, p)
-    ll0  = ll_fn(θ)
-    for i in 1:p
-        θp = copy(θ); θp[i] += h
-        θm = copy(θ); θm[i] -= h
-        g[i] = (ll_fn(θp) - ll_fn(θm)) / (2h)
-        H[i,i] = (ll_fn(θp) - 2ll0 + ll_fn(θm)) / h^2
-        for j in i+1:p
-            θpp = copy(θ); θpp[i] += h; θpp[j] += h
-            θpm = copy(θ); θpm[i] += h; θpm[j] -= h
-            θmp = copy(θ); θmp[i] -= h; θmp[j] += h
-            θmm = copy(θ); θmm[i] -= h; θmm[j] -= h
-            H[i,j] = H[j,i] = (ll_fn(θpp)-ll_fn(θpm)-ll_fn(θmp)+ll_fn(θmm))/(4h^2)
-        end
-    end
-    g, H, ll0
-end
-
 # ── Fitter ────────────────────────────────────────────────────────────────────
 
 """
     parametric_fit(times, status, X; dist, feature_names, max_iter, tol) -> ParametricModel
 
-Fit a parametric AFT model by maximising the log-likelihood.
+Fit a parametric AFT model by maximising the log-likelihood using Optim.jl.
 
 `dist ∈ {:weibull, :exponential, :loglogistic}`
 """
@@ -114,67 +95,85 @@ function parametric_fit(times::AbstractVector, status::AbstractVector{<:Integer}
     β0    = (X_aug'X_aug + 1e-8I) \ X_aug'log_t
     ls0   = 0.0
 
-    # Build LL closure based on dist
-    if dist == :weibull
-        ll_fn = θ -> _weibull_loglik(θ[1:p_aug], θ[end], times, status, X_aug)
-    elseif dist == :exponential
-        # Fix log_scale = 0
-        ll_fn = θ -> _exponential_loglik(θ[1:p_aug], times, status, X_aug)
-    elseif dist == :loglogistic
-        ll_fn = θ -> _loglogistic_loglik(θ[1:p_aug], θ[end], times, status, X_aug)
-    else
-        error("Unknown distribution: $dist. Choose :weibull, :exponential, or :loglogistic")
-    end
-
     if dist == :exponential
-        θ = copy(β0)
-        converged = false
-        for iter in 1:max_iter
-            g, H, ll = _aft_grad_hess(ll_fn, θ)
-            H_reg = H - 1e-8I
-            δθ = -(H_reg \ g)
-            α  = 1.0
-            for _ in 1:8
-                if ll_fn(θ .+ α.*δθ) > ll - 1e-10; break; end
-                α *= 0.5
-            end
-            θ_new = θ .+ α .* δθ
-            if maximum(abs.(θ_new .- θ)) < tol; converged=true; end
-            θ = θ_new
-            converged && break
-        end
-        g, H, ll0 = _aft_grad_hess(ll_fn, θ)
-        info = -H + 1e-10I
-        se   = sqrt.(max.(diag(inv(info)), 1e-20))
+        # Fix log_scale = 0; optimise only β
+        neg_ll = θ -> -_exponential_loglik(θ, times, status, X_aug)
+
+        result = Optim.optimize(
+            neg_ll, copy(β0),
+            Optim.LBFGS(),
+            Optim.Options(iterations=max_iter, g_tol=tol, show_trace=false);
+            autodiff=:forward
+        )
+
+        θ = Optim.minimizer(result)
+        converged = Optim.converged(result)
+        ll0 = -Optim.minimum(result)
+
+        # Compute SEs via numerical Hessian at optimum
+        se = _compute_se_numerical(neg_ll, θ)
+
         return ParametricModel(dist, θ, 0.0, se, 0.0, ll0,
                                -2ll0 + 2*(p_aug), fnames, converged)
     end
 
-    θ = vcat(β0, ls0)
-    converged = false
-    for iter in 1:max_iter
-        g, H, ll = _aft_grad_hess(ll_fn, θ)
-        H_reg = H - 1e-8I
-        δθ = -(H_reg \ g)
-        α = 1.0
-        for _ in 1:8
-            if ll_fn(θ .+ α.*δθ) > ll - 1e-10; break; end
-            α *= 0.5
-        end
-        θ_new = θ .+ α .* δθ
-        if maximum(abs.(θ_new .- θ)) < tol; converged=true; end
-        θ = θ_new
-        converged && break
+    # Weibull or Log-logistic: optimise β and log_scale jointly
+    if dist == :weibull
+        neg_ll = θ -> -_weibull_loglik(θ[1:p_aug], θ[end], times, status, X_aug)
+    elseif dist == :loglogistic
+        neg_ll = θ -> -_loglogistic_loglik(θ[1:p_aug], θ[end], times, status, X_aug)
+    else
+        error("Unknown distribution: $dist. Choose :weibull, :exponential, or :loglogistic")
     end
 
-    g, H, ll_fin = _aft_grad_hess(ll_fn, θ)
-    info = -H + 1e-10I
-    se   = sqrt.(max.(diag(inv(info)), 1e-20))
+    θ0 = vcat(β0, ls0)
+
+    result = Optim.optimize(
+        neg_ll, θ0,
+        Optim.LBFGS(),
+        Optim.Options(iterations=max_iter, g_tol=tol, show_trace=false);
+        autodiff=:forward
+    )
+
+    θ = Optim.minimizer(result)
+    converged = Optim.converged(result)
+    ll_fin = -Optim.minimum(result)
+
+    # Compute SEs via numerical Hessian
+    se = _compute_se_numerical(neg_ll, θ)
+
     β_fit  = θ[1:p_aug]
     ls_fit = θ[end]
 
     ParametricModel(dist, β_fit, ls_fit, se[1:p_aug], se[end], ll_fin,
                     -2ll_fin + 2*(p_aug+1), fnames, converged)
+end
+
+"""
+    _compute_se_numerical(neg_ll, θ; h=1e-5) -> Vector{Float64}
+
+Compute standard errors from numerically estimated Hessian of the
+negative log-likelihood at the optimum.
+"""
+function _compute_se_numerical(neg_ll, θ; h=1e-5)
+    p = length(θ)
+    H = zeros(p, p)
+    f0 = neg_ll(θ)
+    for i in 1:p
+        θp = copy(θ); θp[i] += h
+        θm = copy(θ); θm[i] -= h
+        H[i,i] = (neg_ll(θp) - 2f0 + neg_ll(θm)) / h^2
+        for j in i+1:p
+            θpp = copy(θ); θpp[i] += h; θpp[j] += h
+            θpm = copy(θ); θpm[i] += h; θpm[j] -= h
+            θmp = copy(θ); θmp[i] -= h; θmp[j] += h
+            θmm = copy(θ); θmm[i] -= h; θmm[j] -= h
+            H[i,j] = H[j,i] = (neg_ll(θpp) - neg_ll(θpm) - neg_ll(θmp) + neg_ll(θmm)) / (4h^2)
+        end
+    end
+    # H is the Hessian of neg_ll = observed information
+    info = H + 1e-10I
+    sqrt.(max.(diag(inv(info)), 1e-20))
 end
 
 """

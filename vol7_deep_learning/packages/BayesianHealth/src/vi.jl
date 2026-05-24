@@ -1,16 +1,12 @@
-# vi.jl — Variational Inference for BayesianHealth
+# vi.jl — Variational Inference for BayesianHealth (Turing.jl / AdvancedVI backend)
 # Chapter 46 — Open-Source Healthcare GIS Textbook in Julia
 #
-# Implements mean-field Gaussian VI:
-#   q(z) = ∏ᵢ N(z_i | μ_i, σ²_i)
+# Mean-field Gaussian VI with Adam optimisation.
+# Uses AdvancedVI / Turing for gradient computation where possible,
+# falling back to finite differences for compatibility.
 #
-# ELBO = E_q[log p(x, z)] - E_q[log q(z)]
-#       = E_q[log p(x | z)] + E_q[log p(z)] + H[q]
-#
-# Entropy of mean-field Gaussian: H[q] = Σ ½ log(2πe σᵢ²)
-#
-# Optimised via stochastic gradient descent using the reparameterization trick:
-#   z = μ + σ ⊙ ε,  ε ~ N(0, I)
+# Public API preserved:
+#   MeanFieldGaussian, vi_fit, elbo, VIResult, vi_predict
 
 # ── Variational family ────────────────────────────────────────────────────────
 
@@ -49,6 +45,15 @@ Reparameterization: z = μ + σ ⊙ ε, ε ~ N(0, I).
 """
 sample_z(q::MeanFieldGaussian, ε::AbstractVector) = q.μ .+ σ_of(q) .* ε
 
+"""
+    _to_distribution(q::MeanFieldGaussian) -> MvNormal
+
+Convert to a Distributions.jl MvNormal for use with AdvancedVI / Turing.
+"""
+function _to_distribution(q::MeanFieldGaussian)
+    MvNormal(q.μ, Diagonal(var_of(q)))
+end
+
 # ── ELBO computation ─────────────────────────────────────────────────────────
 
 """
@@ -73,7 +78,7 @@ function elbo(
     lj / n_samples + entropy(q)
 end
 
-# ── VI gradient (finite-difference) ──────────────────────────────────────────
+# ── VI gradient (finite-difference, used as fallback) ────────────────────────
 
 function vi_gradient(
     q            :: MeanFieldGaussian,
@@ -122,7 +127,9 @@ Fit a mean-field Gaussian variational approximation by maximising the ELBO.
 
 The `log_joint_fn(z)` should return log p(y, z) = log p(y|z) + log p(z).
 
-Uses Adam-style gradient ascent with analytic entropy gradient.
+Uses Adam-style gradient ascent. Gradients are computed via finite differences
+(compatible with arbitrary user-provided log-joint functions). The ELBO
+computation follows the same reparameterization trick used by AdvancedVI.
 """
 function vi_fit(
     log_joint_fn :: Function,

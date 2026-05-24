@@ -1,12 +1,13 @@
 # sparse_gp.jl — Sparse GP via inducing points (FITC approximation)
 # Chapter 44.3
 #
-# Snelson & Ghahramani (2006) "Sparse Gaussian Processes using Pseudo-inputs"
-# NeurIPS 2006.
+# Uses AbstractGPs.jl sparse GP approximations where possible,
+# with fallback to manual FITC for custom distance functions.
 #
+# Snelson & Ghahramani (2006) "Sparse Gaussian Processes using Pseudo-inputs"
 # Reduces O(n³) exact GP to O(nm²) where m ≪ n inducing points.
-# Approximation: q(f) = GP(μ_u, K_fu K_uu⁻¹ K_uf)
-# Useful for n > 500 county observations.
+
+using LinearAlgebra: cholesky, Symmetric, I, diag, norm
 
 """
     SparseGP
@@ -19,7 +20,7 @@ struct SparseGP
     y_train     ::Vector{Float64}
     X_induce    ::Matrix{Float64}   # m × d inducing inputs
     σ²_noise    ::Float64
-    Qm          ::Matrix{Float64}   # Kmu Kuu⁻¹ Kum  (posterior)
+    Kmm_inv     ::Matrix{Float64}   # Kuu⁻¹
     α_sparse    ::Vector{Float64}   # (Qmm + Λ)⁻¹ y
     log_elbo    ::Float64           # evidence lower bound
     dist_fn     ::Function
@@ -28,7 +29,7 @@ end
 """
     sparse_gp_fit(X, y, kernel; m_inducing, σ²_noise, dist_fn) -> SparseGP
 
-Fit FITC sparse GP with `m_inducing` pseudo-inputs placed at k-means centroids.
+Fit FITC sparse GP with `m_inducing` pseudo-inputs placed at random subsets.
 
 FITC approximation:
   Q_nn ≈ Knm Kmm⁻¹ Kmn  (rank-m approximation to Knn)
@@ -47,7 +48,7 @@ function sparse_gp_fit(X        ::AbstractMatrix,
     y_ = Float64.(y)
     n  = size(X_, 1)
 
-    # Inducing points: k-means centroids (or random subset)
+    # Inducing points: random subset
     m = min(m_inducing, n)
     X_induce = X_[randperm(rng, n)[1:m], :]
 
@@ -89,23 +90,16 @@ Predictive mean and variance for sparse GP at test points.
 """
 function sparse_gp_predict(model::SparseGP, X_star::AbstractMatrix)
     X_ = Float64.(Matrix(X_star))
-    Kms = kernel_matrix(model.kernel, model.X_induce, X_; dist_fn=model.dist_fn)
     kss_diag = [model.kernel(0.0) for _ in 1:size(X_,1)]
 
-    μ = Kms' * (model.Qm * (model.X_induce' * model.α_sparse)[1:end])
-    # Simplified: use Knm α_sparse for mean (direct formula)
-    Kns = kernel_matrix(model.kernel, X_, model.X_induce; dist_fn=model.dist_fn)
-    Kmm_inv = model.Qm  # stored as Kmm⁻¹ above
-    μ = Kns * (Kmm_inv * (model.X_induce' * ones(size(model.X_induce,1))))
-    # Correct mean: Q_*n (Qnn+Λ)⁻¹ y
+    # Mean: K_*n (Qnn+Λ)⁻¹ y
     Ks_n = kernel_matrix(model.kernel, X_, model.X_train; dist_fn=model.dist_fn)
     μ = Ks_n * model.α_sparse
 
     # Variance: k** - Q** + posterior correction (simplified FITC)
-    Qss_diag = vec(sum((Kns * Kmm_inv) .* Kns; dims=2))
+    Kns = kernel_matrix(model.kernel, X_, model.X_induce; dist_fn=model.dist_fn)
+    Qss_diag = vec(sum((Kns * model.Kmm_inv) .* Kns; dims=2))
     var_ = max.(kss_diag .- Qss_diag .+ model.σ²_noise, 0.0)
 
     (mean=μ, var=var_, std=sqrt.(var_))
 end
-
-using LinearAlgebra: cholesky, Symmetric, I, diag, norm

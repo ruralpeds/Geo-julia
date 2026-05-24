@@ -1,15 +1,17 @@
-# graph.jl — ReferralNetwork data structure
+# graph.jl — ReferralNetwork data structure backed by Graphs.jl
 # Chapter 36.1
 
 """
     ReferralNetwork
 
 Directed, weighted healthcare provider referral graph.
+Backed by `SimpleWeightedGraphs.SimpleWeightedDiGraph` from Graphs.jl ecosystem.
 
 Fields:
 - `n`        — number of nodes (providers)
 - `m`        — number of edges (referral relationships)
 - `adj`      — (n × n) sparse adjacency matrix of referral volumes
+- `graph`    — SimpleWeightedDiGraph for Graphs.jl algorithms
 - `node_attr`— DataFrame with node attributes (id, name, type, lat, lon, ...)
 - `directed` — true for directed referral flows
 """
@@ -17,12 +19,33 @@ struct ReferralNetwork
     n        ::Int
     m        ::Int
     adj      ::SparseMatrixCSC{Float64,Int}
+    graph    ::SimpleWeightedGraphs.SimpleWeightedDiGraph{Int,Float64}
     node_attr::DataFrame
     directed ::Bool
 end
 
 nv(g::ReferralNetwork) = g.n
 ne(g::ReferralNetwork) = g.m
+
+"""
+    _build_weighted_digraph(adj::SparseMatrixCSC) -> SimpleWeightedDiGraph
+
+Build a Graphs.jl weighted digraph from a sparse adjacency matrix.
+"""
+function _build_weighted_digraph(adj::SparseMatrixCSC{Float64,Int})
+    n = size(adj, 1)
+    g = SimpleWeightedGraphs.SimpleWeightedDiGraph(n)
+    rows = rowvals(adj)
+    vals = nonzeros(adj)
+    for col in 1:n
+        for idx in nzrange(adj, col)
+            row = rows[idx]
+            w   = vals[idx]
+            w > 0 && SimpleWeightedGraphs.add_edge!(g, row, col, w)
+        end
+    end
+    g
+end
 
 """
     from_dataframe(edges_df; src_col, dst_col, weight_col, node_df, directed) -> ReferralNetwork
@@ -51,8 +74,9 @@ function from_dataframe(edges_df   ::DataFrame;
         adj[diagind(adj)] ./= 2
     end
 
-    attr = isnothing(node_df) ? DataFrame(id=1:n) : node_df
-    ReferralNetwork(n, nnz(adj), adj, attr, directed)
+    attr  = isnothing(node_df) ? DataFrame(id=1:n) : node_df
+    graph = _build_weighted_digraph(adj)
+    ReferralNetwork(n, nnz(adj), adj, graph, attr, directed)
 end
 
 """
@@ -66,8 +90,9 @@ function from_adjmatrix(A::AbstractMatrix;
     n   = size(A, 1)
     adj = sparse(Float64.(A))
     m   = nnz(adj)
-    attr = isnothing(node_df) ? DataFrame(id=1:n) : node_df
-    ReferralNetwork(n, m, adj, attr, directed)
+    attr  = isnothing(node_df) ? DataFrame(id=1:n) : node_df
+    graph = _build_weighted_digraph(adj)
+    ReferralNetwork(n, m, adj, graph, attr, directed)
 end
 
 """

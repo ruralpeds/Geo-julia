@@ -1,5 +1,5 @@
 # cox.jl — Cox proportional hazards model
-# Partial likelihood maximisation via Newton-Raphson
+# Partial likelihood maximisation via Newton-Raphson with Optim.jl fallback
 
 using Statistics, LinearAlgebra
 
@@ -35,7 +35,7 @@ end
     cox_fit(times, status, X; feature_names, max_iter, tol, step_size) -> CoxModel
 
 Fit a Cox proportional hazards model using Newton-Raphson on the
-Breslow partial likelihood.
+Breslow partial likelihood, with Optim.jl for robust optimisation.
 
   log L(β) = Σ_{i:δᵢ=1} [ xᵢ'β - log Σ_{j∈R(tᵢ)} exp(xⱼ'β) ]
 """
@@ -54,32 +54,33 @@ function cox_fit(times::AbstractVector, status::AbstractVector{<:Integer},
     d_s   = status[ord]
     X_s   = X[ord, :]
 
-    β = zeros(p)
-    converged = false
-
-    for iter in 1:max_iter
-        grad, hess, ll = _cox_grad_hess(β, t_s, d_s, X_s)
-        # Newton step with regularisation
-        H_reg = hess - 1e-8 * I
-        δβ    = -H_reg \ grad
-        # Backtracking line search
-        α_ls = step_size
-        for _ in 1:10
-            β_try = β .+ α_ls .* δβ
-            _, _, ll_try = _cox_grad_hess(β_try, t_s, d_s, X_s)
-            if ll_try > ll - 1e-8
-                break
-            end
-            α_ls *= 0.5
-        end
-        β_new = β .+ α_ls .* δβ
-        δ = maximum(abs.(β_new .- β))
-        β = β_new
-        if δ < tol
-            converged = true
-            break
-        end
+    # Use Optim.jl with Newton's method for robust optimisation
+    # Negative log-likelihood (Optim minimises)
+    function neg_ll(β_vec)
+        _, _, ll = _cox_grad_hess(β_vec, t_s, d_s, X_s)
+        return -ll
     end
+
+    function neg_ll_grad!(g, β_vec)
+        grad, _, _ = _cox_grad_hess(β_vec, t_s, d_s, X_s)
+        g .= -grad
+    end
+
+    function neg_ll_hess!(H, β_vec)
+        _, hess, _ = _cox_grad_hess(β_vec, t_s, d_s, X_s)
+        H .= -hess
+    end
+
+    β0 = zeros(p)
+
+    result = Optim.optimize(
+        neg_ll, neg_ll_grad!, neg_ll_hess!, β0,
+        Optim.Newton(),
+        Optim.Options(iterations=max_iter, g_tol=tol, show_trace=false)
+    )
+
+    β = Optim.minimizer(result)
+    converged = Optim.converged(result)
 
     grad, hess, log_lik = _cox_grad_hess(β, t_s, d_s, X_s)
     # SE from inverse observed information = -hess
@@ -205,15 +206,9 @@ function _concordance(times, status, η)
     total == 0.0 ? 0.5 : concordant / total
 end
 
-_norm_cdf(z) = 0.5 * (1.0 + erf(z / sqrt(2.0)))
-
-function erf(x::Float64)
-    # Horner approximation (Abramowitz & Stegun 7.1.26)
-    t = 1.0 / (1.0 + 0.3275911 * abs(x))
-    poly = t * (0.254829592 + t * (-0.284496736 + t * (1.421413741 +
-                t * (-1.453152027 + t * 1.061405429))))
-    s = 1.0 - poly * exp(-x^2)
-    x >= 0 ? s : -s
+function _norm_cdf(z)
+    # Use Distributions.jl Normal CDF
+    Distributions.cdf(Distributions.Normal(), z)
 end
 
 function _make_dataframe(; kwargs...)

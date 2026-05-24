@@ -1,4 +1,4 @@
-# conley.jl — Conley (1999) spatial HAC standard errors
+# conley.jl — Conley (1999) spatial HAC standard errors using NearestNeighbors.jl
 
 struct ConleyResult
     β::Vector{Float64}        # OLS coefficients
@@ -15,8 +15,9 @@ end
     conley_se(y, X, coords; cutoff, kernel, feature_names) -> ConleyResult
 
 OLS with Conley (1999) spatial HAC standard errors.
-Uses Bartlett kernel K(u) = max(0, 1-|u|) by default.
-`coords` is n×2 matrix of spatial coordinates.
+Uses NearestNeighbors.jl BallTree for efficient spatial neighbor lookup.
+Bartlett kernel K(u) = max(0, 1-|u|) by default.
+`coords` is n x 2 matrix of spatial coordinates.
 `cutoff` is the spatial bandwidth in the same units as `coords`.
 """
 function conley_se(y::AbstractVector, X::AbstractMatrix, coords::AbstractMatrix;
@@ -37,14 +38,22 @@ function conley_se(y::AbstractVector, X::AbstractMatrix, coords::AbstractMatrix;
     V_ols = σ² .* inv(XtX)
     se_ols = sqrt.(diag(V_ols))
 
-    # Spatial bandwidth: default = 10th percentile of non-zero distances
+    # Spatial bandwidth: default = 25th percentile of pairwise distances
     cut  = isnothing(cutoff) ? _default_cutoff(coords) : cutoff
 
-    # Spatial HAC meat: Ω = (1/n) Σᵢ Σⱼ K(dᵢⱼ/cut) ε̂ᵢ ε̂ⱼ xᵢxⱼ'
+    # Build BallTree for efficient spatial neighbor lookup within cutoff
+    coords_t = Matrix(coords')  # NearestNeighbors expects d x n
+    tree = BallTree(coords_t)
+
+    # Spatial HAC meat: Omega = (1/n) Sum_i Sum_j K(d_ij/cut) eps_i eps_j x_i x_j'
     Ω = zeros(k, k)
-    X_w = Xd .* ε̂   # n × k: xᵢ·ε̂ᵢ
+    X_w = Xd .* ε̂   # n x k: x_i * eps_i
+
     for i in 1:n
-        for j in i:n
+        # Find all neighbors within cutoff distance
+        neighbors = inrange(tree, coords_t[:, i], cut)
+        for j in neighbors
+            j < i && continue  # only count each pair once (plus diagonal)
             d   = sqrt(sum((coords[i,:] .- coords[j,:]).^2))
             u   = d / cut
             kw  = _kernel(u, kernel)
@@ -60,7 +69,7 @@ function conley_se(y::AbstractVector, X::AbstractMatrix, coords::AbstractMatrix;
     se_con   = sqrt.(abs.(diag(V_conley)))
 
     t_stats = β ./ max.(se_con, 1e-10)
-    p_vals  = 2 .* (1 .- _norm_cdf.(abs.(t_stats)))
+    p_vals  = 2 .* (1 .- cdf.(Normal(), abs.(t_stats)))
 
     all_names = vcat("(Intercept)", feature_names)
     ConleyResult(β, se_ols, se_con, t_stats, p_vals, cut, n, all_names)
@@ -87,14 +96,6 @@ function _default_cutoff(coords::AbstractMatrix)
     quantile(dists, 0.25)
 end
 
-_norm_cdf(x) = 0.5*(1 + _erf(x/sqrt(2)))
-function _erf(x::Float64)
-    t = 1/(1+0.3275911*abs(x))
-    y = 1 - (0.254829592t - 0.284496736t^2 + 1.421413741t^3 -
-             1.453152027t^4 + 1.061405429t^5) * exp(-x^2)
-    x >= 0 ? y : -y
-end
-
 """
     conley_summary(result) -> String
 
@@ -114,9 +115,4 @@ function conley_summary(r::ConleyResult)
     println("-"^70)
 end
 
-# Minimal printf fallback
-macro sprintf(fmt, args...)
-    :( @sprintf($fmt, $(args...)) )
-end
-# Use Base.Printf for formatting
 import Printf: @sprintf, @printf

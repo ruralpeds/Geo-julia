@@ -1,7 +1,6 @@
 # ripley.jl — Ripley's K(r), L(r), G(r), pair correlation function
+# Uses NearestNeighbors.jl and Distances.jl for distance computation
 # Monte Carlo CSR envelope tests
-
-using Statistics, LinearAlgebra, Random
 
 # ── K function ────────────────────────────────────────────────────────────────
 
@@ -25,13 +24,7 @@ end
     ripley_k(pts, area; r_max, n_r, n_sim, rng, edge_correction) -> KFunctionResult
 
 Estimate Ripley's K function with isotropic edge correction (Ripley 1976).
-
-K̂(r) = (A/n²) Σᵢ Σⱼ≠ᵢ w(xᵢ,xⱼ)⁻¹ · 𝟏(|xᵢ-xⱼ| ≤ r)
-
-where w(xᵢ,xⱼ) = proportion of circle centred at xᵢ, radius |xᵢ-xⱼ|,
-inside the study area (Ripley's isotropic correction).
-
-For rectangular window: w = proportion of circumference inside rectangle.
+Uses Distances.jl for pairwise distance computation.
 """
 function ripley_k(pts::AbstractMatrix, area::Real;
                   r_max::Float64=0.0,
@@ -43,8 +36,9 @@ function ripley_k(pts::AbstractMatrix, area::Real;
     A  = Float64(area)
     @assert size(pts, 2) == 2
 
-    # Compute all pairwise distances
-    D = [sqrt(sum((pts[i,:] .- pts[j,:]).^2)) for i in 1:n, j in 1:n]
+    # Compute pairwise distances using Distances.jl
+    D = Distances.pairwise(Distances.Euclidean(), pts, dims=1)
+
     h_max = r_max > 0 ? r_max : maximum(D) * 0.4
     r_vec = range(h_max/n_r, h_max, length=n_r) |> collect
 
@@ -62,8 +56,7 @@ function ripley_k(pts::AbstractMatrix, area::Real;
     for s in 1:n_sim
         pts_sim = hcat(x_min .+ (x_max-x_min) .* rand(rng, n),
                        y_min .+ (y_max-y_min) .* rand(rng, n))
-        D_sim   = [sqrt(sum((pts_sim[i,:] .- pts_sim[j,:]).^2))
-                   for i in 1:n, j in 1:n]
+        D_sim   = Distances.pairwise(Distances.Euclidean(), pts_sim, dims=1)
         K_sims[s,:] = _compute_k(D_sim, pts_sim, n, bbox_area, r_vec, W, false)
     end
 
@@ -132,10 +125,7 @@ end
     nnd_distribution(pts, area; n_r, n_sim, rng) -> GFunctionResult
 
 Estimate the G function (nearest-neighbour distribution) with CSR envelope.
-
-G(r) = P(NND ≤ r) ≈ #{i: NND_i ≤ r} / n
-
-Under CSR: G(r) = 1 - exp(-λπr²), λ = n/A.
+Uses NearestNeighbors.jl for efficient nearest-neighbour distance computation.
 """
 function nnd_distribution(pts::AbstractMatrix, area::Real;
                            n_r::Int=20,
@@ -144,10 +134,11 @@ function nnd_distribution(pts::AbstractMatrix, area::Real;
     n = size(pts, 1)
     λ = n / Float64(area)
 
-    # Compute all NNDs
-    D = [sqrt(sum((pts[i,:] .- pts[j,:]).^2)) for i in 1:n, j in 1:n]
-    for i in 1:n; D[i,i] = Inf; end
-    nnd = vec(minimum(D, dims=2))
+    # Compute NNDs using NearestNeighbors.jl
+    tree = NearestNeighbors.BallTree(pts')
+    # k=2 because the closest is the point itself
+    idxs, dists = NearestNeighbors.knn(tree, pts', 2)
+    nnd = [d[2] for d in dists]  # second nearest (first is self with dist=0)
 
     r_max = maximum(nnd) * 0.9
     r_vec = range(0.0, r_max, length=n_r+1)[2:end] |> collect
@@ -162,10 +153,9 @@ function nnd_distribution(pts::AbstractMatrix, area::Real;
     for s in 1:n_sim
         pts_s = hcat(x_min .+ (x_max-x_min) .* rand(rng, n),
                      y_min .+ (y_max-y_min) .* rand(rng, n))
-        D_s   = [sqrt(sum((pts_s[i,:] .- pts_s[j,:]).^2))
-                 for i in 1:n, j in 1:n]
-        for i in 1:n; D_s[i,i] = Inf; end
-        nnd_s = vec(minimum(D_s, dims=2))
+        tree_s = NearestNeighbors.BallTree(pts_s')
+        idxs_s, dists_s = NearestNeighbors.knn(tree_s, pts_s', 2)
+        nnd_s = [d[2] for d in dists_s]
         G_sims[s,:] = [mean(nnd_s .<= r) for r in r_vec]
     end
 
@@ -184,10 +174,7 @@ end
     pair_correlation(pts, area; r_max, n_r, bandwidth) -> NamedTuple
 
 Pair correlation function g(r) = K'(r) / (2πr).
-
-g(r) > 1: clustering at scale r
-g(r) < 1: inhibition at scale r
-g(r) ≈ 1: complete spatial randomness
+Uses Distances.jl for pairwise distance computation.
 """
 function pair_correlation(pts::AbstractMatrix, area::Real;
                            r_max::Float64=0.0,
@@ -196,7 +183,7 @@ function pair_correlation(pts::AbstractMatrix, area::Real;
     n  = size(pts, 1)
     A  = Float64(area)
     λ  = n / A
-    D  = [sqrt(sum((pts[i,:] .- pts[j,:]).^2)) for i in 1:n, j in 1:n]
+    D  = Distances.pairwise(Distances.Euclidean(), pts, dims=1)
     h_max = r_max > 0 ? r_max : maximum(D) * 0.4
     r_vec = range(h_max/n_r, h_max, length=n_r) |> collect
     bw    = bandwidth > 0 ? bandwidth : (r_vec[2] - r_vec[1]) * 2

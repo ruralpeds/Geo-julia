@@ -1,0 +1,9 @@
+[deps]
+Genie = "c43c736e-a2d1-11e8-161f-af95571e82d2"
+Stipple = "4acbeb90-81a0-11ea-1966-bdaff8155998"
+StippleUI = "a3c5d34a-b254-4859-a8fa-b86abb5e31ec"
+StipplePlotly = "0254e3ff-2788-4688-862d-7e045ece82c9"
+GenieFramework = "f3bd60ac-b93a-48e8-a9d6-0e73258cbda7"
+JSON3 = "0f8b85d8-7281-11e9-16c2-39a750bddbf1"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
+Dates = "ade2ca70-3891-5945-98fb-dc099432e06a"

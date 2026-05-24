@@ -1,4 +1,4 @@
-# training.jl — Optimizers, training loops, and learning rate schedules
+# training.jl — Optimizers, training loops, and learning rate schedules (Flux-backed)
 # Chapter 45 — Open-Source Healthcare GIS Textbook in Julia
 
 # ── Optimizer state ───────────────────────────────────────────────────────────
@@ -7,9 +7,7 @@
     AdamOptimizer
 
 Adaptive moment estimation (Kingma & Ba 2014).
-m_t = β₁·m_{t-1} + (1-β₁)·g
-v_t = β₂·v_{t-1} + (1-β₂)·g²
-θ_t = θ_{t-1} - α·m̂_t / (√v̂_t + ε)
+Wraps `Optimisers.Adam` internally while preserving the original API.
 """
 mutable struct AdamOptimizer
     lr    :: Float64
@@ -17,7 +15,7 @@ mutable struct AdamOptimizer
     β2    :: Float64
     ε     :: Float64
     t     :: Int               # step counter (for bias correction)
-    state :: Dict{String, Any} # m and v per parameter tensor
+    state :: Dict{String, Any} # internal Optimisers state
 end
 
 AdamOptimizer(; lr=1e-3, β1=0.9, β2=0.999, ε=1e-8) =
@@ -27,7 +25,8 @@ AdamOptimizer(; lr=1e-3, β1=0.9, β2=0.999, ε=1e-8) =
     SGDOptimizer
 
 Stochastic gradient descent with optional momentum and weight decay.
-v_t = μ·v_{t-1} + g;  θ_t = θ_{t-1} - lr·v_t - wd·θ_{t-1}
+Wraps `Optimisers.Momentum` (or `Optimisers.OptimiserChain` with `WeightDecay`)
+internally while preserving the original API.
 """
 mutable struct SGDOptimizer
     lr       :: Float64
@@ -39,28 +38,10 @@ end
 SGDOptimizer(; lr=1e-2, momentum=0.9, wd=1e-4) =
     SGDOptimizer(lr, momentum, wd, Dict{String,Any}())
 
-# ── Gradient computation (finite-difference autograd) ────────────────────────
+# ── Loss functions (thin wrappers around Flux.Losses) ─────────────────────────
 
-"""
-    numerical_gradient(f, θ; ε)
-
-Compute ∂f/∂θ via central finite differences.  Used as a reference
-implementation; production paths use analytic gradients.
-"""
-function numerical_gradient(f, θ::AbstractVector; ε::Float64=1e-5)
-    grad = similar(θ)
-    for i in eachindex(θ)
-        θ_plus  = copy(θ); θ_plus[i]  += ε
-        θ_minus = copy(θ); θ_minus[i] -= ε
-        grad[i] = (f(θ_plus) - f(θ_minus)) / (2ε)
-    end
-    grad
-end
-
-# ── Loss functions ────────────────────────────────────────────────────────────
-
-mse_loss(ŷ, y) = mean((ŷ .- y).^2)
-mae_loss(ŷ, y) = mean(abs.(ŷ .- y))
+mse_loss(ŷ, y) = Flux.Losses.mse(ŷ, y)
+mae_loss(ŷ, y) = Flux.Losses.mae(ŷ, y)
 
 function bce_loss(ŷ::AbstractArray, y::AbstractArray; ε::Float64=1e-7)
     ŷ_clip = clamp.(ŷ, ε, 1-ε)
@@ -70,104 +51,8 @@ end
 function cross_entropy_loss(logits::AbstractMatrix, y_int::AbstractVector)
     # logits: n_classes × batch
     n = length(y_int)
-    p = softmax(logits)
+    p = Flux.softmax(logits; dims=1)
     -mean(log(p[y_int[i], i] + 1e-7) for i in 1:n)
-end
-
-# ── MLP parameter flattening / unflattening ───────────────────────────────────
-
-function _mlp_params(net::MLP)
-    θ = Float64[]
-    for l in net.layers
-        append!(θ, vec(l.W))
-        append!(θ, l.b)
-    end
-    θ
-end
-
-function _mlp_shapes(net::MLP)
-    shapes = Tuple{Symbol,Tuple}[]
-    for (i, l) in enumerate(net.layers)
-        push!(shapes, (:W, size(l.W)))
-        push!(shapes, (:b, size(l.b)))
-    end
-    shapes
-end
-
-# ── Analytic gradient for MLP via backprop ────────────────────────────────────
-
-"""
-    backprop_mlp(net, X, y, loss_fn)
-
-Reverse-mode backpropagation through an MLP.
-Returns (loss, grad_W_list, grad_b_list).
-"""
-function backprop_mlp(net::MLP, X::AbstractMatrix, y::AbstractVecOrMat, loss_fn)
-    # Forward pass — cache activations and pre-activations
-    n_layers = length(net.layers)
-    zs = Vector{Matrix{Float64}}(undef, n_layers)
-    as = Vector{Matrix{Float64}}(undef, n_layers + 1)
-    as[1] = X  # as[i] = activation after layer i-1
-
-    for i in 1:n_layers
-        l = net.layers[i]
-        z = l.W * as[i] .+ l.b
-        zs[i] = z
-        act = activation_fn(l.act)
-        as[i+1] = act(z)
-    end
-
-    # Compute loss
-    ŷ = as[end]
-    loss = loss_fn(ŷ, y)
-
-    # Backward pass
-    grad_W = [zeros(size(l.W)) for l in net.layers]
-    grad_b = [zeros(size(l.b)) for l in net.layers]
-    batch  = size(X, 2)
-
-    # Output layer gradient
-    δ = (ŷ .- y) ./ batch
-
-    for i in n_layers:-1:1
-        l = net.layers[i]
-        act_sym = l.act
-        # Activation derivative
-        if act_sym == :relu
-            d_act = Float64.(zs[i] .> 0)
-        elseif act_sym == :sigmoid
-            s = sigmoid(zs[i])
-            d_act = s .* (1 .- s)
-        elseif act_sym == :tanh
-            d_act = 1 .- tanh.(zs[i]).^2
-        else
-            d_act = ones(size(zs[i]))
-        end
-
-        δ = δ .* d_act
-        grad_W[i] = δ * as[i]'
-        grad_b[i] = vec(sum(δ; dims=2))
-        δ = l.W' * δ
-    end
-
-    loss, grad_W, grad_b
-end
-
-# ── Adam update step ─────────────────────────────────────────────────────────
-
-function adam_update!(opt::AdamOptimizer, key::String,
-                       param::AbstractArray, grad::AbstractArray)
-    if !haskey(opt.state, key * "_m")
-        opt.state[key * "_m"] = zeros(size(param))
-        opt.state[key * "_v"] = zeros(size(param))
-    end
-    m = opt.state[key * "_m"]
-    v = opt.state[key * "_v"]
-    m .= opt.β1 .* m .+ (1 - opt.β1) .* grad
-    v .= opt.β2 .* v .+ (1 - opt.β2) .* grad.^2
-    m̂ = m ./ (1 - opt.β1^opt.t)
-    v̂ = v ./ (1 - opt.β2^opt.t)
-    param .-= opt.lr .* m̂ ./ (sqrt.(v̂) .+ opt.ε)
 end
 
 # ── Mini-batch iterator ───────────────────────────────────────────────────────
@@ -241,13 +126,79 @@ function lr_at(sched::CosineSchedule, epoch::Int)
     sched.lr_min + 0.5 * (sched.lr_max - sched.lr_min) * (1 + cos(π * t / sched.n_epochs))
 end
 
+# ── Zygote-based gradient computation for MLP ────────────────────────────────
+
+"""
+    _mlp_forward(Ws, bs, acts, x)
+
+Pure-function forward pass through MLP layers parameterised by
+vectors of weight matrices and bias vectors. Suitable for Zygote differentiation.
+"""
+function _mlp_forward(Ws::Vector, bs::Vector, acts::Vector{Symbol}, x::AbstractVecOrMat)
+    h = x
+    for i in eachindex(Ws)
+        z = Ws[i] * h .+ bs[i]
+        h = activation_fn(acts[i])(z)
+    end
+    h
+end
+
+"""
+    _zygote_grads(net, X, y, loss_fn)
+
+Compute gradients of loss w.r.t. all Dense layer weights and biases
+using Zygote reverse-mode automatic differentiation.
+Returns (loss_value, grad_W_list, grad_b_list).
+"""
+function _zygote_grads(net::MLP, X::AbstractMatrix, y::AbstractVecOrMat, loss_fn)
+    Ws = [l.W for l in net.layers]
+    bs = [l.b for l in net.layers]
+    acts = [l.act for l in net.layers]
+
+    loss_val, grads = Zygote.withgradient(Ws, bs) do ws, bvecs
+        ŷ = _mlp_forward(ws, bvecs, acts, X)
+        loss_fn(ŷ, y)
+    end
+
+    grad_W = grads[1]  # Vector of gradient matrices
+    grad_b = grads[2]  # Vector of gradient vectors
+
+    # Zygote can return Nothing for zero gradients; replace with zeros
+    gW = [isnothing(g) ? zeros(size(Ws[i])) : g for (i, g) in enumerate(grad_W)]
+    gb = [isnothing(g) ? zeros(size(bs[i])) : g for (i, g) in enumerate(grad_b)]
+
+    loss_val, gW, gb
+end
+
+# ── Adam update step (using Optimisers.jl internally) ────────────────────────
+
+function _get_or_create_optstate(opt::AdamOptimizer, key::String, param::AbstractArray)
+    state_key = key * "_optstate"
+    if !haskey(opt.state, state_key)
+        rule = Optimisers.Adam(opt.lr, (opt.β1, opt.β2), opt.ε)
+        opt.state[state_key] = Optimisers.setup(rule, param)
+    end
+    opt.state[state_key]
+end
+
+function adam_update!(opt::AdamOptimizer, key::String,
+                       param::AbstractArray, grad::AbstractArray)
+    st = _get_or_create_optstate(opt, key, param)
+    # Update the learning rate in the rule to reflect any schedule changes
+    st = Optimisers.adjust(st; eta=opt.lr)
+    opt.state[key * "_optstate"] = st
+    new_st, new_param = Optimisers.update(st, param, grad)
+    opt.state[key * "_optstate"] = new_st
+    param .= new_param
+end
+
 # ── Main training loop ────────────────────────────────────────────────────────
 
 """
     train!(net, X_train, y_train; kwargs...) -> TrainingHistory
 
 Train an MLP via mini-batch Adam with optional validation, early stopping,
-and learning rate scheduling.
+and learning rate scheduling. Uses Zygote for gradient computation.
 
 Returns a `TrainingHistory` with per-epoch train/val losses.
 """
@@ -289,12 +240,11 @@ function train!(
         epoch_loss = 0.0
         for (Xb, yb) in batches
             opt.t += 1
-            loss, gW, gb = backprop_mlp(net, Xb, yb, loss_fn)
+            loss, gW, gb = _zygote_grads(net, Xb, yb, loss_fn)
             epoch_loss += loss
 
-            # In-place Adam updates (mutate W and b directly)
+            # In-place Adam updates
             for (i, l) in enumerate(net.layers)
-                # Reconstruct mutable copies
                 W_new = copy(l.W)
                 b_new = copy(l.b)
                 adam_update!(opt, "W$(i)", W_new, gW[i])
@@ -344,7 +294,7 @@ function evaluate_model(net::MLP, X::AbstractMatrix, y::AbstractVecOrMat;
         return (rmse=rmse, mae=mae, r2=r2, n=length(y))
     else
         # Binary classification
-        ŷ_p = sigmoid.(vec(ŷ))
+        ŷ_p = Flux.sigmoid.(vec(ŷ))
         ŷ_c = Int.(ŷ_p .>= 0.5)
         y_c = Int.(vec(y) .>= 0.5)
         acc = mean(ŷ_c .== y_c)

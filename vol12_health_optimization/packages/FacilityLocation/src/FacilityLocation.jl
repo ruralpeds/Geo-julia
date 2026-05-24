@@ -1,6 +1,7 @@
 module FacilityLocation
 
 using Statistics, LinearAlgebra, Random
+using JuMP, HiGHS
 
 include("pmedian.jl")
 include("covering.jl")

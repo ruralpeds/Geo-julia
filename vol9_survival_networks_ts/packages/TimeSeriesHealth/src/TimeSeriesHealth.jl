@@ -23,6 +23,8 @@ Report: `ts_report`, `TimeSeriesReport`, `print_ts_report`
 module TimeSeriesHealth
 
 using Statistics, LinearAlgebra, Random
+using StateSpaceModels
+using Distributions
 
 include("arima.jl")
 include("state_space.jl")

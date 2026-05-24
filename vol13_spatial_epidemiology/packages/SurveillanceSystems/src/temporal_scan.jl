@@ -78,7 +78,7 @@ function temporal_scan(x::AbstractVector{<:Real};
     exceed = 0
     λ_mean = n / T
     for _ in 1:n_sim
-        y_sim = Float64.([rand(rng, Poisson_approx(λ_mean)) for _ in 1:T])
+        y_sim = Float64.([rand(rng, Poisson(max(λ_mean, 0.0))) for _ in 1:T])
         λ_sim, _, _ = scan_series(y_sim)
         λ_sim >= λ_obs && (exceed += 1)
     end
@@ -88,18 +88,6 @@ function temporal_scan(x::AbstractVector{<:Real};
                        Int(round(c_obs)), μ_obs, rr, n_sim, p_val < 0.05)
 end
 
-# Simple Poisson sampler (no external deps)
-struct Poisson_approx; λ::Float64; end
-function Base.rand(rng::AbstractRNG, d::Poisson_approx)
-    # Knuth algorithm for small λ; normal approx for λ > 30
-    λ = d.λ
-    if λ > 30
-        return max(0, round(Int, λ + sqrt(λ)*randn(rng)))
-    end
-    L = exp(-λ); k = 0; p = 1.0
-    while p > L; k += 1; p *= rand(rng); end
-    k - 1
-end
 
 """
     prospective_scan(x; window, n_sim, rng) -> NamedTuple
@@ -128,7 +116,7 @@ function prospective_scan(x::AbstractVector{<:Real};
     λ_obs, t1_obs = prospective_llr(x)
     exceed = 0; λ_mean = n/T
     for _ in 1:n_sim
-        y_sim = Float64.([rand(rng, Poisson_approx(λ_mean)) for _ in 1:T])
+        y_sim = Float64.([rand(rng, Poisson(max(λ_mean, 0.0))) for _ in 1:T])
         λ_sim, _ = prospective_llr(y_sim)
         λ_sim >= λ_obs && (exceed += 1)
     end

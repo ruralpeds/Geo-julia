@@ -22,6 +22,9 @@ both a mean prediction AND credible intervals — crucial for policy:
 module GaussianProcessHealth
 
 using DataFrames, LinearAlgebra, Statistics, Random, Distributions
+import KernelFunctions
+import AbstractGPs
+import Optim
 
 export GPKernel, SquaredExponential, Matern32, Matern52, RationalQuadratic
 export OrnsteinUhlenbeck, CompositeKernel

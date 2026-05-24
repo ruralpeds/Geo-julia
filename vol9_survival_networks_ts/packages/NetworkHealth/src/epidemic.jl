@@ -1,77 +1,7 @@
 # epidemic.jl — SIR / SEIR / SEIRD compartmental ODE models
-# Integration via RK4; R₀ estimation; herd immunity threshold
+# Integration via OrdinaryDiffEq.jl (Tsit5); R₀ estimation; network SIR
 
 using Statistics
-
-# ── ODE right-hand sides ──────────────────────────────────────────────────────
-
-function _sir_rhs(u, p, t)
-    S, I, R = u
-    N = S + I + R
-    β, γ = p
-    dS = -β * S * I / N
-    dI =  β * S * I / N - γ * I
-    dR =  γ * I
-    [dS, dI, dR]
-end
-
-function _seir_rhs(u, p, t)
-    S, E, I, R = u
-    N = S + E + I + R
-    β, σ, γ = p
-    dS = -β * S * I / N
-    dE =  β * S * I / N - σ * E
-    dI =  σ * E - γ * I
-    dR =  γ * I
-    [dS, dE, dI, dR]
-end
-
-function _seird_rhs(u, p, t)
-    S, E, I, R, D = u
-    N = S + E + I + R   # D is removed from N-at-risk
-    β, σ, γ, μ = p
-    dS = -β * S * I / N
-    dE =  β * S * I / N - σ * E
-    dI =  σ * E - (γ + μ) * I
-    dR =  γ * I
-    dD =  μ * I
-    [dS, dE, dI, dR, dD]
-end
-
-# ── RK4 integrator ────────────────────────────────────────────────────────────
-
-"""
-    rk4_integrate(rhs, u0, tspan; dt) -> (times, states)
-
-4th-order Runge-Kutta integration.
-"""
-function rk4_integrate(rhs::Function, u0::Vector{Float64},
-                        tspan::Tuple{Float64,Float64};
-                        dt::Float64=0.5, p=())
-    t0, tf = tspan
-    times  = collect(t0:dt:tf)
-    isempty(times) && push!(times, t0)
-    times[end] != tf && push!(times, tf)
-
-    n_t    = length(times)
-    states = zeros(length(u0), n_t)
-    states[:, 1] = u0
-    u = copy(u0)
-
-    for i in 2:n_t
-        h  = times[i] - times[i-1]
-        t_i = times[i-1]
-        k1 = rhs(u, p, t_i)
-        k2 = rhs(u .+ h/2 .* k1, p, t_i + h/2)
-        k3 = rhs(u .+ h/2 .* k2, p, t_i + h/2)
-        k4 = rhs(u .+ h   .* k3, p, t_i + h)
-        u  = u .+ h/6 .* (k1 .+ 2k2 .+ 2k3 .+ k4)
-        # Clamp non-negative
-        u  = max.(u, 0.0)
-        states[:, i] = u
-    end
-    times, states
-end
 
 # ── SIR model ─────────────────────────────────────────────────────────────────
 
@@ -109,18 +39,30 @@ function sir_model(N::Int, I0::Int=1;
                    β::Float64=0.3, γ::Float64=0.1,
                    tspan::Tuple{Float64,Float64}=(0.0, 160.0),
                    dt::Float64=0.5)
-    S0 = Float64(N - I0)
-    u0 = [S0, Float64(I0), 0.0]
-    p  = (β, γ)
-    times, states = rk4_integrate(_sir_rhs, u0, tspan; dt=dt, p=p)
+    S0 = (N - I0) / N
+    I0_frac = I0 / N
+    R0_frac = 0.0
+    u0 = [S0, I0_frac, R0_frac]
 
-    S = states[1,:] ./ N
-    I = states[2,:] ./ N
-    R = states[3,:] ./ N
+    function sir!(du, u, p, t)
+        S, I, R = u
+        β_p, γ_p = p
+        du[1] = -β_p * S * I
+        du[2] =  β_p * S * I - γ_p * I
+        du[3] =  γ_p * I
+    end
 
-    R0    = β / γ
-    pi    = argmax(I)
-    SIRResult(times, S, I, R, β, γ, R0, I[pi], times[pi], R[end])
+    prob = ODEProblem(sir!, u0, tspan, [β, γ])
+    sol  = solve(prob, Tsit5(); saveat=dt)
+
+    times = sol.t
+    S = [sol[1, i] for i in 1:length(sol)]
+    I = [sol[2, i] for i in 1:length(sol)]
+    R = [sol[3, i] for i in 1:length(sol)]
+
+    R0_val = β / γ
+    pi     = argmax(I)
+    SIRResult(times, S, I, R, β, γ, R0_val, I[pi], times[pi], R[end])
 end
 
 # ── SEIR model ────────────────────────────────────────────────────────────────
@@ -158,17 +100,30 @@ function seir_model(N::Int, E0::Int=5, I0::Int=1;
                     β::Float64=0.3, σ::Float64=0.2, γ::Float64=0.1,
                     tspan::Tuple{Float64,Float64}=(0.0, 200.0),
                     dt::Float64=0.5)
-    u0 = Float64[N - E0 - I0, E0, I0, 0.0]
-    p  = (β, σ, γ)
-    times, states = rk4_integrate(_seir_rhs, u0, tspan; dt=dt, p=p)
+    u0 = [(N - E0 - I0) / N, E0 / N, I0 / N, 0.0]
 
-    S = states[1,:] ./ N; E = states[2,:] ./ N
-    I = states[3,:] ./ N; R = states[4,:] ./ N
+    function seir!(du, u, p, t)
+        S, E, I, R = u
+        β_p, σ_p, γ_p = p
+        du[1] = -β_p * S * I
+        du[2] =  β_p * S * I - σ_p * E
+        du[3] =  σ_p * E - γ_p * I
+        du[4] =  γ_p * I
+    end
 
-    R0  = β / γ
-    pi  = argmax(I)
-    h_t = R0 > 1 ? 1.0 - 1.0/R0 : 0.0
-    SEIRResult(times, S, E, I, R, β, σ, γ, R0, I[pi], times[pi], h_t)
+    prob = ODEProblem(seir!, u0, tspan, [β, σ, γ])
+    sol  = solve(prob, Tsit5(); saveat=dt)
+
+    times = sol.t
+    S = [sol[1, i] for i in 1:length(sol)]
+    E = [sol[2, i] for i in 1:length(sol)]
+    I = [sol[3, i] for i in 1:length(sol)]
+    R = [sol[4, i] for i in 1:length(sol)]
+
+    R0_val = β / γ
+    pi     = argmax(I)
+    h_t    = R0_val > 1 ? 1.0 - 1.0/R0_val : 0.0
+    SEIRResult(times, S, E, I, R, β, σ, γ, R0_val, I[pi], times[pi], h_t)
 end
 
 # ── SEIRD model ───────────────────────────────────────────────────────────────
@@ -203,17 +158,34 @@ function seird_model(N::Int;
                      E0::Int=5, I0::Int=1,
                      tspan::Tuple{Float64,Float64}=(0.0, 200.0),
                      dt::Float64=0.5)
-    u0 = Float64[N - E0 - I0, E0, I0, 0.0, 0.0]
-    p  = (β, σ, γ, μ)
-    times, states = rk4_integrate(_seird_rhs, u0, tspan; dt=dt, p=p)
+    u0 = [(N - E0 - I0) / N, E0 / N, I0 / N, 0.0, 0.0]
 
-    S = states[1,:] ./ N; E = states[2,:] ./ N
-    I = states[3,:] ./ N; R = states[4,:] ./ N; D = states[5,:] ./ N
+    function seird!(du, u, p, t)
+        S, E, I, R, D = u
+        β_p, σ_p, γ_p, μ_p = p
+        N_eff = S + E + I + R   # D removed from at-risk population
+        N_eff = max(N_eff, 1e-10)
+        du[1] = -β_p * S * I / N_eff
+        du[2] =  β_p * S * I / N_eff - σ_p * E
+        du[3] =  σ_p * E - (γ_p + μ_p) * I
+        du[4] =  γ_p * I
+        du[5] =  μ_p * I
+    end
 
-    R0  = β / γ   # ignoring μ in R0 (approximate)
-    pi  = argmax(I)
-    ifr = μ / (γ + μ)
-    SEIRDResult(times, S, E, I, R, D, β, σ, γ, μ, R0, ifr, I[pi], times[pi])
+    prob = ODEProblem(seird!, u0, tspan, [β, σ, γ, μ])
+    sol  = solve(prob, Tsit5(); saveat=dt)
+
+    times = sol.t
+    S = [sol[1, i] for i in 1:length(sol)]
+    E = [sol[2, i] for i in 1:length(sol)]
+    I = [sol[3, i] for i in 1:length(sol)]
+    R = [sol[4, i] for i in 1:length(sol)]
+    D = [sol[5, i] for i in 1:length(sol)]
+
+    R0_val = β / γ   # ignoring μ in R0 (approximate)
+    pi     = argmax(I)
+    ifr    = μ / (γ + μ)
+    SEIRDResult(times, S, E, I, R, D, β, σ, γ, μ, R0_val, ifr, I[pi], times[pi])
 end
 
 # ── R₀ estimation ─────────────────────────────────────────────────────────────

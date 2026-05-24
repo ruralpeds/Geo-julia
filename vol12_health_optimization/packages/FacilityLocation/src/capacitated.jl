@@ -1,8 +1,8 @@
-# capacitated.jl — Capacitated Facility Location + Voronoi catchments
+# capacitated.jl — Capacitated Facility Location via JuMP + Voronoi catchments
 
 struct CapFLPResult
     open_facilities::Vector{Int}
-    assignment::Vector{Int}       # demand i → facility index
+    assignment::Vector{Int}       # demand i -> facility index (global)
     objective::Float64
     capacity_used::Vector{Float64}
     capacity_slack::Vector{Float64}
@@ -12,8 +12,8 @@ end
 """
     cap_flp(demand_pts, cand_pts, p; weights, capacities, max_iter, rng) -> CapFLPResult
 
-Capacitated p-median: minimise total weighted distance subject to capacity
-constraints at each open facility. Uses a greedy-then-exchange heuristic.
+Capacitated p-median via JuMP IP: minimise total weighted distance subject to
+capacity constraints at each open facility.
 
 `capacities`: length-m vector; total weight each candidate can serve.
 """
@@ -28,68 +28,52 @@ function cap_flp(demand_pts::AbstractMatrix,
     p    = min(p, m)
     D    = [sqrt(sum((demand_pts[i,:] .- cand_pts[j,:]).^2)) for i in 1:n, j in 1:m]
 
-    # Greedy initialisation: same as p-median but honour capacities
-    open_set  = Int[]
-    cost_vec  = fill(Inf, n)
-    remaining = collect(1:m)
-    for _ in 1:p
-        best_j = 0; best_gain = -Inf
-        for j in remaining
-            new_cost = min.(cost_vec, D[:,j])
-            gain     = sum(weights .* (cost_vec .- new_cost))
-            if gain > best_gain; best_gain = gain; best_j = j; end
-        end
-        best_j == 0 && break
-        push!(open_set, best_j)
-        filter!(x -> x != best_j, remaining)
-        cost_vec = min.(cost_vec, D[:,best_j])
+    # Cap infinite capacities at total demand to keep the model bounded
+    total_demand = sum(weights)
+    caps = [isinf(capacities[j]) ? total_demand : capacities[j] for j in 1:m]
+
+    # ── JuMP IP formulation ──────────────────────────────────────────────────
+    model = Model(HiGHS.Optimizer)
+    set_silent(model)
+
+    @variable(model, x[1:n, 1:m], Bin)   # x[i,j] = 1 if demand i assigned to facility j
+    @variable(model, y[1:m], Bin)          # y[j] = 1 if facility j is open
+
+    @objective(model, Min, sum(weights[i] * D[i,j] * x[i,j] for i in 1:n, j in 1:m))
+
+    # Each demand point assigned to exactly one facility
+    @constraint(model, [i=1:n], sum(x[i,j] for j in 1:m) == 1)
+
+    # Open exactly p facilities
+    @constraint(model, sum(y) == p)
+
+    # Can only assign to open facilities
+    @constraint(model, [i=1:n, j=1:m], x[i,j] <= y[j])
+
+    # Capacity constraints
+    @constraint(model, [j=1:m], sum(weights[i] * x[i,j] for i in 1:n) <= caps[j] * y[j])
+
+    optimize!(model)
+
+    status = termination_status(model)
+
+    if status in (OPTIMAL, LOCALLY_SOLVED, FEASIBLE_POINT)
+        y_val = value.(y)
+        x_val = value.(x)
+        open_set = sort([j for j in 1:m if y_val[j] > 0.5])
+        # Build assignment: for each demand point, which open facility
+        global_asgn = [open_set[argmax([x_val[i,j] for j in open_set])] for i in 1:n]
+        # Local assignment index (1..p) for compatibility
+        asgn_local = [findfirst(==(global_asgn[i]), open_set) for i in 1:n]
+        obj = objective_value(model)
+        load = [sum(weights[i] for i in 1:n if global_asgn[i] == j; init=0.0) for j in open_set]
+        slack = [caps[open_set[k]] - load[k] for k in 1:length(open_set)]
+        feasible = all(load[k] <= caps[open_set[k]] + 1e-6 for k in 1:length(open_set))
+        CapFLPResult(open_set, global_asgn, obj, load, slack, feasible)
+    else
+        # Fallback: return infeasible result
+        CapFLPResult(Int[], zeros(Int, n), Inf, Float64[], Float64[], false)
     end
-
-    # Capacity-feasible assignment via greedy nearest-feasible
-    assign_fn = (os) -> begin
-        load  = zeros(length(os))
-        asgn  = zeros(Int, n)
-        order = sortperm(minimum(D[i, os] for i in 1:n) for i in 1:n)  # nearest first
-        for idx in order
-            i = idx
-            sorted_f = sortperm(D[i, os])
-            for k in sorted_f
-                if load[k] + weights[i] <= capacities[os[k]] + 1e-9
-                    asgn[i] = k; load[k] += weights[i]; break
-                end
-            end
-            asgn[i] == 0 && (asgn[i] = sorted_f[1]; load[sorted_f[1]] += weights[i])
-        end
-        obj = sum(weights[i] * D[i, os[asgn[i]]] for i in 1:n)
-        obj, asgn, load
-    end
-
-    obj, asgn, load = assign_fn(open_set)
-    slack = [capacities[open_set[k]] - load[k] for k in 1:length(open_set)]
-
-    # 2-opt swap improvement
-    for _ in 1:max_iter
-        improved = false
-        for j_out in shuffle(rng, copy(open_set))
-            for j_in in shuffle(rng, collect(setdiff(1:m, open_set)))
-                ns = copy(open_set); replace!(ns, j_out => j_in)
-                new_obj, new_asgn, new_load = assign_fn(ns)
-                if new_obj < obj - 1e-9
-                    open_set = ns; obj = new_obj; asgn = new_asgn; load = new_load
-                    improved = true; break
-                end
-            end
-            improved && break
-        end
-        !improved && break
-    end
-
-    feasible = all(load[k] <= capacities[open_set[k]] + 1e-6 for k in 1:length(open_set))
-    slack    = [capacities[open_set[k]] - load[k] for k in 1:length(open_set)]
-
-    # Convert local assignment (1..p) to global facility index
-    global_asgn = open_set[asgn]
-    CapFLPResult(sort(open_set), global_asgn, obj, load, slack, feasible)
 end
 
 """

@@ -1,6 +1,5 @@
 # smr.jl — Standardised Mortality/Morbidity Ratio and indirect standardisation
-
-using Statistics
+# Uses Distributions.jl for Poisson p-values
 
 # ── SMR calculation ───────────────────────────────────────────────────────────
 
@@ -25,9 +24,7 @@ end
 
 Compute SMR = O/E with Byar (1979) approximate confidence interval.
 
-Byar CI: [O·(1 - 1/(9O) - z/√(9O))³ / E, (O+1)·(1 - 1/(9(O+1)) + z/√(9(O+1)))³ / E]
-
-One-sided Poisson p-value for H₀: E[O] = E (i.e. SMR=1).
+One-sided Poisson p-value using Distributions.jl for H₀: E[O] = E (i.e. SMR=1).
 """
 function smr(observed::Real, expected::Real;
              area::String="area", alpha::Float64=0.05)
@@ -44,7 +41,7 @@ function smr(observed::Real, expected::Real;
     lo_smr = lo_o / E
     hi_smr = hi_o / E
 
-    # Poisson exact p-value for H0: λ=E, upper tail
+    # Poisson p-value using Distributions.jl
     p = _poisson_upper_tail_p(O, E)
     sig = p < alpha
 
@@ -68,8 +65,6 @@ end
 Compute indirectly-standardised expected counts.
 
 E_i = Σ_a pop_ia · ref_rate_a
-
-where ref_rate_a = national/reference rate in age group a.
 """
 function indirect_standardise(counts_age::AbstractMatrix,   # n_areas × n_age
                                 pop_age::AbstractMatrix,
@@ -81,25 +76,17 @@ function indirect_standardise(counts_age::AbstractMatrix,   # n_areas × n_age
     expected, observed
 end
 
-# ── Poisson CDF utilities ─────────────────────────────────────────────────────
+# ── Poisson CDF using Distributions.jl ───────────────────────────────────────
 
-"""Upper tail P(X ≥ O | λ=E) via regularised incomplete gamma."""
+"""Upper tail P(X ≥ O | λ=E) using Distributions.jl Poisson CDF."""
 function _poisson_upper_tail_p(O::Float64, E::Float64)
     O <= 0 && return 1.0
-    # P(X >= O) = Γ(O, E) / Γ(O) = regularised upper incomplete gamma
-    # = 1 - P(X <= O-1) = 1 - Σ_{k=0}^{O-1} e^{-E} E^k / k!
-    k_max = round(Int, O) - 1
-    k_max < 0 && return 1.0
-    # Compute via log-sum-exp
-    log_probs = [k*log(E) - E - _log_factorial(k) for k in 0:k_max]
-    lse = log_probs[1] + log(sum(exp.(log_probs .- log_probs[1])))
-    p_lower = exp(lse)
+    k = round(Int, O) - 1
+    k < 0 && return 1.0
+    # P(X >= O) = 1 - P(X <= O-1) = 1 - cdf(Poisson(E), O-1)
+    dist = Distributions.Poisson(E)
+    p_lower = Distributions.cdf(dist, k)
     max(0.0, min(1.0, 1.0 - p_lower))
-end
-
-function _log_factorial(k::Int)
-    k <= 1 && return 0.0
-    sum(log(j) for j in 2:k)
 end
 
 # ── SMR mapping summary ───────────────────────────────────────────────────────

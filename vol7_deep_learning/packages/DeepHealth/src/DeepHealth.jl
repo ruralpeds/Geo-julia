@@ -4,7 +4,7 @@
 Neural network architectures for healthcare access prediction.
 Chapter 45 — Open-Source Healthcare GIS Textbook in Julia.
 
-Provides pure-Julia implementations of:
+Provides Flux-backed implementations of:
 - Layer primitives: Dense, BatchNorm, Dropout, MultiHeadAttention
 - Network architectures: MLP, GNN, TabNet-style feature selection
 - Training utilities: Adam, SGD, mini-batch, early stopping, LR schedules
@@ -14,6 +14,9 @@ Provides pure-Julia implementations of:
 module DeepHealth
 
 using LinearAlgebra, Statistics, Random, DataFrames
+using Flux
+using Optimisers
+using Zygote
 
 include("layers.jl")
 include("networks.jl")

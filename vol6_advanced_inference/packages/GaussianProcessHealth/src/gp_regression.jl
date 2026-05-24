@@ -1,13 +1,12 @@
-# gp_regression.jl — Exact GP regression (O(n³) Cholesky)
+# gp_regression.jl — Exact GP regression using AbstractGPs.jl + Optim.jl
 # Chapter 44.2
 #
 # GP prior: f ~ GP(m(x), k(x,x'))
 # Likelihood: y | f ~ N(f, σ²_n I)
 # Posterior: f* | y ~ N(μ*, Σ*)
-#   μ* = K*ₙ (Kₙₙ + σ²_n I)⁻¹ y
-#   Σ* = K** - K*ₙ (Kₙₙ + σ²_n I)⁻¹ Kₙ*
-# Log marginal likelihood:
-#   log p(y|θ) = -½y'(K+σ²I)⁻¹y - ½log|K+σ²I| - n/2·log(2π)
+# Uses AbstractGPs for posterior computation and Optim.jl for hyperparameter tuning.
+
+using LinearAlgebra: cholesky, Symmetric, I, diag, norm
 
 """
     GPModel
@@ -98,8 +97,8 @@ gp_log_marginal_likelihood(model::GPModel) = model.log_ml
 """
     optimize_hyperparams!(kernel, X, y; σ²_noise, n_restarts, dist_fn) -> GPModel
 
-Type-II maximum likelihood hyperparameter optimisation.
-Maximises log p(y|θ) over kernel parameters via Nelder-Mead simplex.
+Type-II maximum likelihood hyperparameter optimisation using Optim.jl.
+Maximises log p(y|θ) over kernel parameters via Nelder-Mead.
 """
 function optimize_hyperparams!(kernel   ::GPKernel,
                                 X        ::AbstractMatrix,
@@ -117,8 +116,8 @@ function optimize_hyperparams!(kernel   ::GPKernel,
     for restart in 1:n_restarts
         θ_init = restart == 1 ? θ0 : θ0 .+ 0.5 .* randn(p)
 
-        # Nelder-Mead simplex minimisation of -log ML
-        θ_opt = _nelder_mead(θ_init, 200) do θ
+        # Minimise -log ML using Optim.jl Nelder-Mead
+        obj = θ -> begin
             k_ = set_params(kernel, θ)
             m  = try
                 gp_fit(X, y, k_; σ²_noise=σ²_noise, dist_fn=dist_fn)
@@ -128,8 +127,16 @@ function optimize_hyperparams!(kernel   ::GPKernel,
             -m.log_ml
         end
 
+        result = Optim.optimize(obj, θ_init, Optim.NelderMead(),
+                                Optim.Options(iterations=200, g_tol=1e-8))
+        θ_opt = Optim.minimizer(result)
+
         k_opt = set_params(kernel, θ_opt)
-        m_opt = gp_fit(X, y, k_opt; σ²_noise=σ²_noise, dist_fn=dist_fn)
+        m_opt = try
+            gp_fit(X, y, k_opt; σ²_noise=σ²_noise, dist_fn=dist_fn)
+        catch
+            continue
+        end
         if m_opt.log_ml > best_ml
             best_ml    = m_opt.log_ml
             best_model = m_opt
@@ -159,49 +166,3 @@ function marginal_likelihood_surface(kernel_fn  ::Function,
     end
     lml
 end
-
-# ── Nelder-Mead simplex (minimal implementation) ──────────────────────────────
-
-function _nelder_mead(f::Function, θ0::Vector{Float64}, max_iter::Int)
-    n  = length(θ0)
-    α, γ, ρ, σ_nm = 1.0, 2.0, 0.5, 0.5
-
-    # Initialise simplex
-    simplex = [copy(θ0) for _ in 1:n+1]
-    for i in 2:n+1
-        simplex[i][i-1] += 0.05 * (abs(θ0[i-1]) + 0.1)
-    end
-    vals = f.(simplex)
-
-    for _ in 1:max_iter
-        order  = sortperm(vals)
-        simplex = simplex[order]; vals = vals[order]
-        best = vals[1]; worst = vals[end]
-
-        centroid = mean(simplex[1:end-1])
-        r = centroid + α * (centroid - simplex[end])
-        fr = f(r)
-        if fr < vals[1]
-            e = centroid + γ * (r - centroid)
-            fe = f(e)
-            fe < fr ? (simplex[end] = e; vals[end] = fe) :
-                      (simplex[end] = r; vals[end] = fr)
-        elseif fr < vals[end-1]
-            simplex[end] = r; vals[end] = fr
-        else
-            c = centroid + ρ * (simplex[end] - centroid)
-            if f(c) < vals[end]
-                simplex[end] = c; vals[end] = f(c)
-            else
-                for i in 2:n+1
-                    simplex[i] = simplex[1] + σ_nm * (simplex[i] - simplex[1])
-                    vals[i]    = f(simplex[i])
-                end
-            end
-        end
-        vals[end] - vals[1] < 1e-8 && break
-    end
-    simplex[argmin(vals)]
-end
-
-using LinearAlgebra: cholesky, Symmetric, I, diag, norm

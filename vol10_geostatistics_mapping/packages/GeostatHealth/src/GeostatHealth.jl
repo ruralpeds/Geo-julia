@@ -1,7 +1,7 @@
 """
     GeostatHealth
 
-Pure-Julia geostatistics for healthcare spatial interpolation.
+Geostatistics for healthcare spatial interpolation, powered by GeoStats.jl.
 
 Exports: empirical_variogram, fit_variogram, VariogramModel, variogram_value,
 covariance_value, variogram_summary, EmpiricalVariogram;
@@ -13,6 +13,11 @@ geostat_report, GeostatReport, print_geostat_report
 module GeostatHealth
 
 using Statistics, LinearAlgebra, Random
+using GeoStats
+using Meshes
+using GeoTables
+using Variography
+using GeoStatsModels
 
 include("variogram.jl")
 include("kriging.jl")

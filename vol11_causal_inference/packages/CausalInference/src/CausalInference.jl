@@ -1,6 +1,7 @@
 module CausalInference
 
 using Statistics, LinearAlgebra, Random
+using GLM, Distributions, StatsBase, NearestNeighbors, DataFrames
 
 include("propensity.jl")
 include("ipw.jl")

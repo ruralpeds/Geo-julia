@@ -1,6 +1,5 @@
 # clustering.jl — DBSCAN, Knox test, spatial scan for point patterns
-
-using Statistics, LinearAlgebra, Random
+# Uses Clustering.jl for DBSCAN and Distances.jl for distance computation
 
 # ── DBSCAN ────────────────────────────────────────────────────────────────────
 
@@ -21,52 +20,35 @@ end
     dbscan(pts; ε, min_pts) -> DBSCANResult
 
 DBSCAN (Ester et al. 1996) density-based spatial clustering.
-
-Core point: ≥ min_pts neighbours within distance ε.
-Cluster: connected component of core points + border points.
+Uses Clustering.jl `dbscan()` internally.
 """
 function dbscan(pts::AbstractMatrix; ε::Float64=1.0, min_pts::Int=3)
     n = size(pts, 1)
-    D = [sqrt(sum((pts[i,:] .- pts[j,:]).^2)) for i in 1:n, j in 1:n]
-    neighbours = [findall(D[i,:] .<= ε) for i in 1:n]
-    # Exclude self
-    neighbours = [setdiff(nb, [i]) for (i, nb) in enumerate(neighbours)]
 
-    # Core points
-    is_core = [length(neighbours[i]) >= min_pts - 1 for i in 1:n]
-    core_pts = findall(is_core)
+    # Clustering.jl dbscan expects a distance matrix or data in columns
+    D = Distances.pairwise(Distances.Euclidean(), pts, dims=1)
+    result = _Clustering.dbscan(D, ε; min_neighbors=min_pts - 1, metric=nothing)
 
-    labels    = zeros(Int, n)
-    visited   = falses(n)
-    cluster_id = 0
+    # Convert Clustering.jl result to our format
+    labels = zeros(Int, n)
+    n_clusters = length(result)
+    cluster_sizes = Int[]
+    core_pts_all = Int[]
 
-    for i in core_pts
-        visited[i] && continue
-        cluster_id += 1
-        # BFS to find all density-connected points
-        queue = [i]; visited[i] = true; labels[i] = cluster_id
-        head  = 1
-        while head <= length(queue)
-            p = queue[head]; head += 1
-            for q in neighbours[p]
-                if !visited[q]
-                    visited[q]   = true
-                    labels[q]    = cluster_id
-                    is_core[q] && push!(queue, q)
-                end
-            end
+    for (k, cluster) in enumerate(result)
+        for idx in cluster.core_indices
+            labels[idx] = k
+            push!(core_pts_all, idx)
         end
-    end
-
-    # Border points not yet labelled
-    for i in 1:n
-        labels[i] == 0 && visited[i] && (labels[i] = 0)
+        for idx in cluster.boundary_indices
+            labels[idx] = k
+        end
+        push!(cluster_sizes, cluster.size)
     end
 
     n_noise = sum(labels .== 0)
-    sizes   = [sum(labels .== k) for k in 1:cluster_id]
 
-    DBSCANResult(labels, cluster_id, n_noise, core_pts, sizes)
+    DBSCANResult(labels, n_clusters, n_noise, sort(core_pts_all), cluster_sizes)
 end
 
 # ── Knox test for space-time clustering ───────────────────────────────────────
@@ -90,6 +72,7 @@ end
 
 Knox test: count pairs (i,j) where d(xᵢ,xⱼ) ≤ d_thresh AND |tᵢ-tⱼ| ≤ t_thresh.
 Under H₀ (no space-time interaction): times are randomly permuted.
+Uses Distances.jl for spatial distance computation.
 """
 function knox_test(coords::AbstractMatrix, times::AbstractVector;
                    d_thresh::Float64=1.0,
@@ -99,14 +82,12 @@ function knox_test(coords::AbstractMatrix, times::AbstractVector;
     n = length(times)
     @assert size(coords, 1) == n
 
-    D = [sqrt(sum((coords[i,:] .- coords[j,:]).^2)) for i in 1:n, j in 1:n]
-    T = [abs(times[i] - times[j]) for i in 1:n, j in 1:n]
+    D = Distances.pairwise(Distances.Euclidean(), coords, dims=1)
 
     _count_pairs = function(t_perm)
-        T_perm = [abs(t_perm[i] - t_perm[j]) for i in 1:n, j in 1:n]
         count  = 0
         for i in 1:n-1, j in i+1:n
-            if D[i,j] <= d_thresh && T_perm[i,j] <= t_thresh
+            if D[i,j] <= d_thresh && abs(t_perm[i] - t_perm[j]) <= t_thresh
                 count += 1
             end
         end
@@ -146,9 +127,7 @@ end
     spatial_scan_points(cases, controls; max_frac, n_sim, alpha, rng) -> ScanPointResult
 
 Bernoulli spatial scan statistic for case-control point data.
-
-LLR = n_in·log(n_in/N_in) + n_out·log(n_out/N_out) - n·log(n/N)
-where n=cases, N=cases+controls. Only if p_in > p_out.
+Uses Distances.jl for pairwise distance computation.
 """
 function spatial_scan_points(cases::AbstractMatrix, controls::AbstractMatrix;
                               max_frac::Float64=0.5,
@@ -162,7 +141,7 @@ function spatial_scan_points(cases::AbstractMatrix, controls::AbstractMatrix;
     labels  = vcat(ones(Bool, n_cases), zeros(Bool, n_ctrl))
     p_global = n_cases / n_all
 
-    D = [sqrt(sum((all_pts[i,:] .- all_pts[j,:]).^2)) for i in 1:n_all, j in 1:n_all]
+    D = Distances.pairwise(Distances.Euclidean(), all_pts, dims=1)
 
     best_llr = 0.0; best_res = nothing
     for ctr in 1:n_all

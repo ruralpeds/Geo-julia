@@ -1,5 +1,7 @@
 # kernels.jl — Covariance kernels for spatial GP regression
 # Chapter 44.1
+#
+# Wrapper structs around KernelFunctions.jl for API compatibility.
 
 abstract type GPKernel end
 
@@ -9,6 +11,8 @@ abstract type GPKernel end
 RBF / Squared Exponential kernel: k(r) = σ²·exp(-r²/2ℓ²)
 Infinitely differentiable — smooth spatial fields.
 `σ²` = signal variance, `ℓ` = length-scale (km for geographic use).
+
+Backed by `KernelFunctions.SqExponentialKernel()`.
 """
 struct SquaredExponential <: GPKernel
     σ²::Float64
@@ -21,11 +25,18 @@ param_names(::SquaredExponential) = ["log_σ²", "log_ℓ"]
 get_params(k::SquaredExponential) = [log(k.σ²), log(k.ℓ)]
 set_params(::SquaredExponential, θ) = SquaredExponential(exp(θ[1]), exp(θ[2]))
 
+"""Return the corresponding KernelFunctions.jl kernel."""
+function _to_kf_kernel(k::SquaredExponential)
+    k.σ² * KernelFunctions.transform(KernelFunctions.SqExponentialKernel(), 1.0 / k.ℓ)
+end
+
 """
     Matern32(σ², ℓ)
 
 Matérn 3/2 kernel: k(r) = σ²(1 + √3r/ℓ)exp(-√3r/ℓ)
 Once-differentiable — rougher spatial fields. Recommended for healthcare access.
+
+Backed by `KernelFunctions.Matern32Kernel()`.
 """
 struct Matern32 <: GPKernel
     σ²::Float64
@@ -41,11 +52,17 @@ param_names(::Matern32) = ["log_σ²", "log_ℓ"]
 get_params(k::Matern32) = [log(k.σ²), log(k.ℓ)]
 set_params(::Matern32, θ) = Matern32(exp(θ[1]), exp(θ[2]))
 
+function _to_kf_kernel(k::Matern32)
+    k.σ² * KernelFunctions.transform(KernelFunctions.Matern32Kernel(), 1.0 / k.ℓ)
+end
+
 """
     Matern52(σ², ℓ)
 
 Matérn 5/2 kernel: k(r) = σ²(1 + √5r/ℓ + 5r²/3ℓ²)exp(-√5r/ℓ)
 Twice-differentiable. Good balance between SE and Matérn 3/2.
+
+Backed by `KernelFunctions.Matern52Kernel()`.
 """
 struct Matern52 <: GPKernel
     σ²::Float64
@@ -60,6 +77,10 @@ end
 param_names(::Matern52) = ["log_σ²", "log_ℓ"]
 get_params(k::Matern52) = [log(k.σ²), log(k.ℓ)]
 set_params(::Matern52, θ) = Matern52(exp(θ[1]), exp(θ[2]))
+
+function _to_kf_kernel(k::Matern52)
+    k.σ² * KernelFunctions.transform(KernelFunctions.Matern52Kernel(), 1.0 / k.ℓ)
+end
 
 """
     RationalQuadratic(σ², ℓ, α)
@@ -77,6 +98,10 @@ param_names(::RationalQuadratic) = ["log_σ²", "log_ℓ", "log_α"]
 get_params(k::RationalQuadratic) = [log(k.σ²), log(k.ℓ), log(k.α)]
 set_params(::RationalQuadratic, θ) = RationalQuadratic(exp(θ[1]), exp(θ[2]), exp(θ[3]))
 
+function _to_kf_kernel(k::RationalQuadratic)
+    k.σ² * KernelFunctions.transform(KernelFunctions.RationalQuadraticKernel(α=k.α), 1.0 / k.ℓ)
+end
+
 """
     OrnsteinUhlenbeck(σ², ℓ)
 
@@ -92,6 +117,10 @@ OrnsteinUhlenbeck(; σ²=1.0, ℓ=1.0) = OrnsteinUhlenbeck(σ², ℓ)
 param_names(::OrnsteinUhlenbeck) = ["log_σ²", "log_ℓ"]
 get_params(k::OrnsteinUhlenbeck) = [log(k.σ²), log(k.ℓ)]
 set_params(::OrnsteinUhlenbeck, θ) = OrnsteinUhlenbeck(exp(θ[1]), exp(θ[2]))
+
+function _to_kf_kernel(k::OrnsteinUhlenbeck)
+    k.σ² * KernelFunctions.transform(KernelFunctions.ExponentialKernel(), 1.0 / k.ℓ)
+end
 
 """
     CompositeKernel

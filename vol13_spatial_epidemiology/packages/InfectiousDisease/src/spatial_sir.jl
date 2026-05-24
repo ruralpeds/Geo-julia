@@ -1,4 +1,5 @@
 # spatial_sir.jl — Spatial patch SIR model on a network of counties/regions
+# Uses OrdinaryDiffEq for the coupled multi-patch ODE system
 
 using Statistics, LinearAlgebra, Random
 
@@ -50,33 +51,40 @@ function spatial_sir(N::AbstractVector{<:Real},
     # Movement / coupling matrix
     M = _gravity_matrix(coords, Nf; coupling=coupling_strength, use_gravity=gravity)
 
-    ts = 0.0:dt:t_end; T = length(ts)
-    Sv = zeros(T, n); Iv = zeros(T, n); Rv = zeros(T, n)
-    Sv[1, :] = Nf .- Float64.(I₀)
-    Iv[1, :] = Float64.(I₀)
-
-    for t in 2:T
-        s = Sv[t-1, :]; i_prev = Iv[t-1, :]; r = Rv[t-1, :]
-
-        # Patch-level ODEs with coupling (Euler for speed)
-        ds = zeros(n); di = zeros(n); dr = zeros(n)
-        for p in 1:n
-            local_inf  = β_vec[p] * s[p] * i_prev[p] / max(Nf[p], 1.0)
-            # Imported infectious pressure: Σᵩ M[q,p] * I[q]/N[q]
-            import_inf = sum(M[q,p] * i_prev[q] / max(Nf[q],1.0) for q in 1:n if q!=p; init=0.0) * s[p]
-            recover    = γf * i_prev[p]
-            ds[p] = -(local_inf + import_inf)
-            di[p] =  (local_inf + import_inf) - recover
-            dr[p] =  recover
+    # ODE: state u = [S₁..Sₙ, I₁..Iₙ, R₁..Rₙ] (length 3n)
+    function spatial_sir_ode!(du, u, p, t)
+        β_v, γ_, N_, M_, np = p
+        for pp in 1:np
+            s = u[pp]
+            i = u[np + pp]
+            # Local infection
+            local_inf = β_v[pp] * s * i / max(N_[pp], 1.0)
+            # Imported infectious pressure
+            import_inf = 0.0
+            for q in 1:np
+                q == pp && continue
+                import_inf += M_[q, pp] * u[np + q] / max(N_[q], 1.0)
+            end
+            import_inf *= s
+            recover = γ_ * i
+            du[pp]        = -(local_inf + import_inf)        # dS
+            du[np + pp]   =  (local_inf + import_inf) - recover  # dI
+            du[2*np + pp] =  recover                          # dR
         end
-        Sv[t, :] = max.(0.0, s .+ dt .* ds)
-        Iv[t, :] = max.(0.0, i_prev .+ dt .* di)
-        Rv[t, :] = r .+ dt .* dr
-        # Renormalize
+    end
+
+    u0 = vcat(Nf .- Float64.(I₀), Float64.(I₀), zeros(n))
+    tspan = (0.0, t_end)
+    prob = ODEProblem(spatial_sir_ode!, u0, tspan, (β_vec, γf, Nf, M, n))
+    sol  = solve(prob, Tsit5(); saveat=dt, abstol=1e-6, reltol=1e-6)
+
+    T_len = length(sol.t)
+    Sv = zeros(T_len, n); Iv = zeros(T_len, n); Rv = zeros(T_len, n)
+    for ti in 1:T_len
         for p in 1:n
-            tot = Sv[t,p]+Iv[t,p]+Rv[t,p]
-            f   = Nf[p]/max(tot, 1e-9)
-            Sv[t,p]*=f; Iv[t,p]*=f; Rv[t,p]*=f
+            Sv[ti, p] = max(0.0, sol[p, ti])
+            Iv[ti, p] = max(0.0, sol[n + p, ti])
+            Rv[ti, p] = max(0.0, sol[2*n + p, ti])
         end
     end
 
@@ -84,9 +92,9 @@ function spatial_sir(N::AbstractVector{<:Real},
     attack_rate = Rv[end, :] ./ Nf
     # Global R₀ from early exponential growth
     total_I = sum(Iv; dims=2)[:]
-    R₀_global = _estimate_r0_growth(total_I[1:min(30,T)], γf, dt)
+    R₀_global = _estimate_r0_growth(total_I[1:min(30,T_len)], γf, dt)
 
-    SpatialSIRResult(Sv./Nf', Iv./Nf', Rv./Nf', collect(ts),
+    SpatialSIRResult(Sv./Nf', Iv./Nf', Rv./Nf', collect(sol.t),
                      β_vec, γf, M, R₀_global, peak_patch, attack_rate, n)
 end
 

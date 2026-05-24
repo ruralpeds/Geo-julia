@@ -29,6 +29,8 @@ Models the healthcare provider referral ecosystem as a directed weighted graph:
 module NetworkHealth
 
 using DataFrames, LinearAlgebra, SparseArrays, Statistics, StatsBase, Random
+import Graphs
+import SimpleWeightedGraphs
 
 export ReferralNetwork, from_dataframe, from_adjmatrix, nv, ne, neighbors, degree
 export degree_centrality, betweenness_centrality, closeness_centrality

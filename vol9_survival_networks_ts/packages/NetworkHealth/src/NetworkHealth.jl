@@ -20,6 +20,8 @@ Report: `network_report`, `NetworkReport`, `print_network_report`
 module NetworkHealth
 
 using Statistics, LinearAlgebra, Random
+using OrdinaryDiffEq
+using Graphs
 
 include("graph.jl")
 include("epidemic.jl")

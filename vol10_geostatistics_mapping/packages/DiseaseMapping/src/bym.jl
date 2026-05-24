@@ -1,7 +1,6 @@
 # bym.jl — Besag-York-Mollié (BYM) Bayesian Disease Mapping
 # ICAR spatial prior + uncorrelated heterogeneity; Gibbs sampler
-
-using Statistics, LinearAlgebra, Random
+# Uses Distributions.jl for Gamma sampling
 
 # ── Spatial adjacency and ICAR precision ─────────────────────────────────────
 
@@ -43,13 +42,10 @@ function _log_likelihood_poisson(O, E, η)
 end
 
 function _log_prior_icar(u, Q, τ_u)
-    # log p(u|τ_u) ∝ (n-1)/2 log τ_u - τ_u/2 u'Qu
-    n = length(u)
     -τ_u / 2 * (u' * Q * u)
 end
 
 function _log_prior_iid(v, τ_v)
-    n = length(v)
     -τ_v / 2 * sum(v.^2)
 end
 
@@ -59,11 +55,6 @@ end
     BYMResult
 
 Fitted BYM model.
-
-Fields: u_mean, u_var (spatial effect); v_mean, v_var (uncorrelated);
-        η_mean (log relative risk); smr (raw SMR); rr (posterior mean RR);
-        dic, pd (deviance information criterion, effective parameters);
-        posterior samples (if keep_samples=true).
 """
 struct BYMResult
     u_mean   ::Vector{Float64}
@@ -86,17 +77,8 @@ end
     bym_fit(O, E, W, Q; μ_init, n_iter, n_warmup, rng,
             a_τ, b_τ, proposal_sd) -> BYMResult
 
-Fit the BYM2 model (Riebler et al. 2016) by Gibbs/MH sampling.
-
-Model:
-  O_i | u_i, v_i ~ Poisson(E_i · exp(μ + u_i + v_i))
-  u | τ_u ~ ICAR(Q, τ_u);  τ_u ~ Gamma(a, b)
-  v_i | τ_v ~ N(0, 1/τ_v); τ_v ~ Gamma(a, b)
-  μ ~ flat
-
-Individual u_i updates via Metropolis-Hastings with Gaussian proposal.
-τ_u, τ_v updated via Gibbs (conjugate Gamma).
-μ updated via Gibbs (conjugate normal).
+Fit the BYM2 model by Gibbs/MH sampling.
+Uses Distributions.jl Gamma distribution for conjugate updates.
 """
 function bym_fit(O::AbstractVector, E::AbstractVector,
                   W::AbstractMatrix, Q::AbstractMatrix;
@@ -143,12 +125,9 @@ function bym_fit(O::AbstractVector, E::AbstractVector,
         # Centre u (improper prior — need centering)
         u .-= mean(u)
 
-        # ── Update each v_i via Gibbs ──
+        # ── Update each v_i via MH ──
         η_no_v = μ .+ u
         for i in 1:n
-            # Posterior: N( post_mean, post_var )
-            # p(v_i | rest) ∝ Poisson(E_i exp(η_no_v_i + v_i)) * N(v_i; 0, 1/τ_v)
-            # MH step for v_i
             v_prop   = v[i] + 0.15 * randn(rng)
             ll_diff  = O_f[i]*(v_prop - v[i]) - E_f[i]*(exp(η_no_v[i]+v_prop) - exp(η_no_v[i]+v[i]))
             lp_diff  = -τ_v/2 * (v_prop^2 - v[i]^2)
@@ -166,7 +145,7 @@ function bym_fit(O::AbstractVector, E::AbstractVector,
             μ = μ_prop
         end
 
-        # ── Update τ_u via Gibbs (Gamma conjugate) ──
+        # ── Update τ_u via Gibbs (Gamma conjugate) using Distributions.jl ──
         a_post = a_τ + (n - 1) / 2.0
         b_post = b_τ + 0.5 * (u' * Q * u)
         τ_u    = rand_gamma(rng, a_post, 1.0/b_post)
@@ -196,7 +175,7 @@ function bym_fit(O::AbstractVector, E::AbstractVector,
     rr_lo  = [quantile(exp.(η_samps[:,i]), 0.025) for i in 1:n]
     rr_hi  = [quantile(exp.(η_samps[:,i]), 0.975) for i in 1:n]
 
-    # DIC: D̄ - 2pD where pD = D̄ - D(θ̄)
+    # DIC
     D_bar = mean([-2*_log_likelihood_poisson(O_f, E_f, η_samps[s,:])
                   for s in 1:n_keep])
     D_at_mean = -2 * _log_likelihood_poisson(O_f, E_f, η_mean)
@@ -207,23 +186,15 @@ function bym_fit(O::AbstractVector, E::AbstractVector,
               mean(τu_samps), mean(τv_samps), dic, pd, n_iter, n)
 end
 
-# ── Gamma random variate (Marsaglia-Tsang) ────────────────────────────────────
+# ── Gamma random variate using Distributions.jl ─────────────────────────────
 
+"""
+    rand_gamma(rng, α, θ) -> Float64
+
+Draw from Gamma(α, θ) using Distributions.jl.
+"""
 function rand_gamma(rng::AbstractRNG, α::Float64, θ::Float64)
     α <= 0 && error("α must be positive")
-    if α < 1.0
-        u = rand(rng)
-        return rand_gamma(rng, α + 1.0, θ) * u^(1.0/α)
-    end
-    # Marsaglia & Tsang (2000)
-    d = α - 1.0/3.0; c = 1.0/sqrt(9d)
-    while true
-        x = randn(rng); v = (1 + c*x)^3
-        if v > 0
-            u = rand(rng)
-            if log(u) < 0.5*x^2 + d - d*v + d*log(v)
-                return d * v * θ
-            end
-        end
-    end
+    dist = Distributions.Gamma(α, θ)
+    rand(rng, dist)
 end
