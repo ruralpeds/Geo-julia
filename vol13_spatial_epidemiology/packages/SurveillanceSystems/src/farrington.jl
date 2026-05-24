@@ -178,14 +178,4 @@ function calibrate_threshold(x::AbstractVector{<:Real},
     (threshold=best_h, f1=best_f1, performance=best_perf, method=method)
 end
 
-# ─── Normal quantile helper ───────────────────────────────────────────────────
-
-# Rational approximation (Abramowitz & Stegun §26.2.17), max error < 4.5e-4
-function _qnorm(p::Float64)
-    (p <= 0 || p >= 1) && error("p must be in (0,1)")
-    p < 0.5 && return -_qnorm(1-p)
-    t = sqrt(-2 * log(1-p))
-    c0, c1, c2 = 2.515517, 0.802853, 0.010328
-    d1, d2, d3 = 1.432788, 0.189269, 0.001308
-    t - (c0 + c1*t + c2*t^2) / (1 + d1*t + d2*t^2 + d3*t^3)
-end
+# Normal quantile now provided by Distributions.jl (imported in main module)
