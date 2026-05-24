@@ -16,6 +16,8 @@ Methods:
 module HealthIntelligence
 
 using Statistics, LinearAlgebra, Random
+using StatsBase: zscore, quantile as sb_quantile
+using Distributions: Poisson, quantile as dist_quantile, confint
 
 include("risk_scoring.jl")
 include("anomaly.jl")
