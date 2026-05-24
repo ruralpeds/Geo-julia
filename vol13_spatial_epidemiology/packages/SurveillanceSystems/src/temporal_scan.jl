@@ -78,7 +78,7 @@ function temporal_scan(x::AbstractVector{<:Real};
     exceed = 0
     λ_mean = n / T
     for _ in 1:n_sim
-        y_sim = Float64.([rand(rng, Poisson_approx(λ_mean)) for _ in 1:T])
+        y_sim = Float64.([rand(rng, Poisson(max(λ_mean, 0.0))) for _ in 1:T])
         λ_sim, _, _ = scan_series(y_sim)
         λ_sim >= λ_obs && (exceed += 1)
     end

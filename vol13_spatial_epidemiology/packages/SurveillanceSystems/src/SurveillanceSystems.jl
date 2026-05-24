@@ -15,6 +15,7 @@ Methods:
 module SurveillanceSystems
 
 using Statistics, LinearAlgebra, Random
+using Distributions: Poisson, Normal, quantile as dist_quantile
 
 include("cusum.jl")
 include("farrington.jl")
