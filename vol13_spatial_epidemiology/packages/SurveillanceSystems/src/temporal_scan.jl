@@ -88,18 +88,6 @@ function temporal_scan(x::AbstractVector{<:Real};
                        Int(round(c_obs)), μ_obs, rr, n_sim, p_val < 0.05)
 end
 
-# Simple Poisson sampler (no external deps)
-struct Poisson_approx; λ::Float64; end
-function Base.rand(rng::AbstractRNG, d::Poisson_approx)
-    # Knuth algorithm for small λ; normal approx for λ > 30
-    λ = d.λ
-    if λ > 30
-        return max(0, round(Int, λ + sqrt(λ)*randn(rng)))
-    end
-    L = exp(-λ); k = 0; p = 1.0
-    while p > L; k += 1; p *= rand(rng); end
-    k - 1
-end
 
 """
     prospective_scan(x; window, n_sim, rng) -> NamedTuple
