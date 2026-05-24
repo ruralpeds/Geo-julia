@@ -149,7 +149,7 @@ end
 
 @testset "InfectiousDisease — Stochastic SIR" begin
     r = sir_stochastic(10000, 5, 0.3, 0.1; rng=MersenneTwister(5))
-    @test all(r.S .+ r.I .+ r.R .≈ 1.0 .± 0.01)
+    @test all(abs.(r.S .+ r.I .+ r.R .- 1.0) .< 0.01)
     @test all(r.I .>= -1e-6)
 end
 
