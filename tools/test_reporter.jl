@@ -56,7 +56,7 @@ _cat_suggestion = Dict(
 # ─── Report sections ─────────────────────────────────────────────────────────
 
 function _header(io::IO, store::ResultStore)
-    s = summary(store)
+    s = TestUtils.summary(store)
     ts = Dates.format(now(), "yyyy-mm-dd HH:MM:SS")
     println(io, "# Geo-Julia Debug Report\n")
     println(io, "> Generated: $(ts)\n")
@@ -75,7 +75,7 @@ function _header(io::IO, store::ResultStore)
 end
 
 function _pass_table(io::IO, store::ResultStore)
-    passes = passed_outcomes(store)
+    passes = TestUtils.passed_outcomes(store)
     isempty(passes) && return
     println(io, "## Passed Suites ($(length(passes)))\n")
     println(io, "| Suite | Assertions | Time (s) |")
@@ -87,15 +87,15 @@ function _pass_table(io::IO, store::ResultStore)
 end
 
 function _fail_table(io::IO, store::ResultStore)
-    fails = failed_outcomes(store)
+    fails = TestUtils.failed_outcomes(store)
     isempty(fails) && return
     println(io, "## Failed Suites ($(length(fails)))\n")
 
     # Group by failure category
-    by_cat = Dict{FailureCategory, Vector{TestOutcome}}()
+    by_cat = Dict{TestUtils.FailureCategory, Vector{TestUtils.TestOutcome}}()
     for o in fails
-        cat = categorise_outcome(o)
-        push!(get!(by_cat, cat, TestOutcome[]), o)
+        cat = TestUtils.categorise_outcome(o)
+        push!(get!(by_cat, cat, TestUtils.TestOutcome[]), o)
     end
 
     for (cat, outcomes) in sort(collect(by_cat); by=kv->string(kv[1]))
@@ -106,8 +106,8 @@ function _fail_table(io::IO, store::ResultStore)
         println(io, "| Suite | Failed | Errored | Retries | Time (s) |")
         println(io, "|-------|--------|---------|---------|----------|")
         for o in sort(outcomes; by=o->o.name)
-            @printf io "| %-38s | %6d | %7d | %7d | %8.2f |\n" \
-                "`$(o.name)`" o.failed o.errored o.retries o.elapsed_s
+            @printf(io, "| %-38s | %6d | %7d | %7d | %8.2f |\n",
+                o.name, o.failed, o.errored, o.retries, o.elapsed_s)
         end
         println(io)
 
@@ -128,12 +128,12 @@ function _fail_table(io::IO, store::ResultStore)
 end
 
 function _failure_category_pie(io::IO, store::ResultStore)
-    fails = failed_outcomes(store)
+    fails = TestUtils.failed_outcomes(store)
     isempty(fails) && return
     println(io, "## Failure Category Breakdown\n")
-    counts = Dict{FailureCategory,Int}()
+    counts = Dict{TestUtils.FailureCategory,Int}()
     for o in fails
-        cat = categorise_outcome(o)
+        cat = TestUtils.categorise_outcome(o)
         counts[cat] = get(counts, cat, 0) + 1
     end
     println(io, "| Category | Count | Proportion |")
@@ -141,17 +141,17 @@ function _failure_category_pie(io::IO, store::ResultStore)
     total = sum(values(counts))
     for (cat, n) in sort(collect(counts); by=kv->-kv[2])
         label = get(_cat_label, cat, string(cat))
-        @printf io "| %-25s | %5d | %9.1f%% |\n" label n (100.0*n/total)
+        @printf(io, "| %-25s | %5d | %9.1f%% |\n", label, n, (100.0*n/total))
     end
     println(io)
 end
 
 function _debug_checklist(io::IO, store::ResultStore)
-    fails = failed_outcomes(store)
+    fails = TestUtils.failed_outcomes(store)
     isempty(fails) && return
     println(io, "## Debug Checklist\n")
     println(io, "Work through each item in order before re-running the cycle:\n")
-    cats = unique(categorise_outcome(o) for o in fails)
+    cats = unique(TestUtils.categorise_outcome(o) for o in fails)
     step = 1
     for cat in cats
         sugg = get(_cat_suggestion, cat, "")

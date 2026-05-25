@@ -1,6 +1,6 @@
 module SpatialCausal
 
-using Statistics, LinearAlgebra, Random
+using Statistics, LinearAlgebra, Random, Printf
 using GLM, Distributions, NearestNeighbors, DataFrames
 
 include("spatial_did.jl")

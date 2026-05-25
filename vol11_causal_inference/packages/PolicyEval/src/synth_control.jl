@@ -29,11 +29,9 @@ function synth_control(Y_treated_pre::AbstractVector,
     T_pre, n_d = size(Y_donors_pre)
     T_post     = length(Y_treated_post)
 
-    # Normalise to mean 0 / sd 1 for numerical stability
-    μ  = mean(Y_donors_pre, dims=1)[:]
-    σv = std(Y_donors_pre, dims=1)[:]; σv[σv .< 1e-8] .= 1.0
-    Xd = (Y_donors_pre .- μ') ./ σv'
-    xt = (Y_treated_pre .- μ)  ./ σv
+    # Use raw values for the matching objective
+    Xd = Y_donors_pre
+    xt = Y_treated_pre
 
     # Optimise on unconstrained space using softmax transformation
     # w = softmax(θ) ensures w >= 0 and sum(w) = 1

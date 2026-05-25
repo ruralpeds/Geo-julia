@@ -89,7 +89,17 @@ function catchment_voronoi(demand_pts::AbstractMatrix,
     D     = [sqrt(sum((demand_pts[i,:] .- facility_pts[j,:]).^2)) for i in 1:n, j in 1:m]
     asgn  = [argmin(D[i,:]) for i in 1:n]
     pop   = [sum(weights[asgn .== j]) for j in 1:m]
-    mdist = [mean(D[i,asgn[i]] for i in 1:n if asgn[i]==j; init=0.0) for j in 1:m]
+    # Simple Gini coefficient for population distribution
+    gini = if sum(pop) > 0
+        p_sorted = sort(pop)
+        n_p = length(p_sorted)
+        sum((2i - n_p - 1) * p_sorted[i] for i in 1:n_p) / (n_p * sum(p_sorted))
+    else
+        0.0
+    end
+    mdist = [let d_vals = [D[i,asgn[i]] for i in 1:n if asgn[i]==j]
+                isempty(d_vals) ? 0.0 : mean(d_vals)
+             end for j in 1:m]
     (assignment=asgn, catchment_pop=pop, mean_dist=mdist,
-     total_pop=sum(weights), n_facilities=m)
+     total_pop=sum(weights), n_facilities=m, gini=gini)
 end

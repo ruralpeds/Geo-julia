@@ -4,14 +4,14 @@ authors = ["Healthcare GeoAnalysis Contributors"]
 version = "0.1.0"
 
 [deps]
-DataFrames = "a93c6f00-e57d-5684-b466-afe8fa294f38"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 NearestNeighbors = "b8a86587-4115-5ab1-83bc-aa920d37bbce"
 Optim = "429524aa-4258-5aef-a3af-852621145aeb"
 SparseArrays = "2f01184e-e22b-5df5-ae63-d93ebab69eaf"
 Statistics = "10745b16-79ce-11e8-11f9-7d13ad32a3b2"
-StatsBase = "2913bbd2-ae8a-5f71-8cce-781a0e4197df"
+StatsBase = "2913bbd2-ae8a-5f71-8c99-4fb6c76f3a91"
 
 [compat]
 julia = "1.10"
@@ -22,7 +22,7 @@ Optim = "1"
 StatsBase = "0.34"
 
 [extras]
-Test = "8dfed614-e22c-358e-b159-9f75977ba353"
+Test = "8dfed614-e22c-5e08-85e1-63c23f67ee08"
 Random = "9a3f8284-a2c9-5f02-9a11-845980a1fd5c"
 
 [targets]

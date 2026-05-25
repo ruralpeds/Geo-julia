@@ -58,7 +58,8 @@ function empirical_variogram(coords::AbstractMatrix, z::AbstractVector;
     bw = bandwidth > 0 ? Float64(bandwidth) : h_max / n_lags
 
     # Use GeoStats EmpiricalVariogram
-    ev = if estimator == :robust
+    # Check for CressieHawkinsEstimator availability (API varies across versions)
+    ev = if estimator == :robust && isdefined(Variography, :CressieHawkinsEstimator)
         Variography.EmpiricalVariogram(geotable, :Z;
             nlags=n_lags, maxlag=h_max,
             estimator=Variography.CressieHawkinsEstimator())
@@ -68,15 +69,14 @@ function empirical_variogram(coords::AbstractMatrix, z::AbstractVector;
     end
 
     # Extract values from GeoStats empirical variogram
-    ev_values = Variography.values(ev)
     lags_out  = Float64[]
     gamma_out = Float64[]
     npairs_out = Int[]
 
-    for (h, γ, np) in ev_values
+    for (h, γ, np) in Variography.values(ev)
         push!(lags_out, h)
         push!(gamma_out, np > 0 ? γ : NaN)
-        push!(npairs_out, np)
+        push!(npairs_out, round(Int, np))
     end
 
     EmpiricalVariogram(lags_out, gamma_out, npairs_out, bw, estimator)

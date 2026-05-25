@@ -92,6 +92,7 @@ function check_conditioning(A::AbstractMatrix;
         "matrix is ill-conditioned (κ ≈ $(round(κ; sigdigits=3)))",
         op,
         "threshold = $(threshold); consider regularization"))
+    return nothing
 end
 
 """
@@ -157,6 +158,7 @@ function check_convergence(residual::Float64, tol::Float64,
     (iter >= max_iter && residual > tol) && throw(ConvergenceError(
         "$(name) did not converge within $(max_iter) iterations",
         iter, tol, residual))
+    return nothing
 end
 
 # ─── Safe statistical helpers ─────────────────────────────────────────────────

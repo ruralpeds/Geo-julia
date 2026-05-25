@@ -3,7 +3,7 @@ using Test, Statistics, Random, LinearAlgebra
 include(joinpath(@__DIR__, "..", "src", "CausalInference.jl"))
 using .CausalInference
 
-function make_data(n=200; seed=1, true_ate=2.0)
+function make_data(; n=200, seed=1, true_ate=2.0)
     rng = MersenneTwister(seed)
     X   = randn(rng, n, 3)
     # True PS logistic in X[:,1], X[:,2]

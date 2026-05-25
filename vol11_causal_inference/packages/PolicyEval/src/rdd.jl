@@ -101,8 +101,8 @@ function _ik_bandwidth(y::AbstractVector, x_c::AbstractVector)
     # Pilot regression: cubic on each side for curvature estimation
     function mse_criterion(h_cand)
         h_cand <= 0 && return Inf
-        idx_l = x_c .< 0 .& abs.(x_c) .<= h_cand
-        idx_r = x_c .>= 0 .& abs.(x_c) .<= h_cand
+        idx_l = (x_c .< 0) .& (abs.(x_c) .<= h_cand)
+        idx_r = (x_c .>= 0) .& (abs.(x_c) .<= h_cand)
         n_l = sum(idx_l); n_r = sum(idx_r)
         (n_l < 4 || n_r < 4) && return Inf
 

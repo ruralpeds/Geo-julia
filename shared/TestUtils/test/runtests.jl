@@ -96,16 +96,15 @@ end
     @test status(o2) == :fail
     @test status(o3) == :fail
 end
-
 @testset "summary" begin
     store = ResultStore()
     # Empty store
-    s = summary(store)
+    s = TestUtils.summary(store)
     @test s.total == 0
 
     push!(store, TestOutcome("p", "f.jl", 5, 0, 0, 0.1))
     push!(store, TestOutcome("q", "f.jl", 3, 1, 0, 0.2))
-    s = summary(store)
+    s = TestUtils.summary(store)
     @test s.total   == 2
     @test s.passed  == 1
     @test s.failed  == 1

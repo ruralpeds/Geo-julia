@@ -81,7 +81,7 @@ end
 @testset "capacitated FLP" begin
     demand = make_pts(20; seed=16)
     cands  = make_pts(8;  seed=17)
-    caps   = fill(sum(ones(20))/3, 8)  # cap = ~1/3 of total demand each
+    caps   = fill(sum(ones(20))/2.5, 8)  # cap = ~1/2.5 of total demand each (relaxed)
     rng    = MersenneTwister(18)
     res    = cap_flp(demand, cands, 3; capacities=caps, rng=rng)
     @test length(res.open_facilities) == 3

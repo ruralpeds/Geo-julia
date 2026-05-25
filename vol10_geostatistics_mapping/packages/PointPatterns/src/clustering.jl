@@ -31,11 +31,11 @@ function dbscan(pts::AbstractMatrix; ε::Float64=1.0, min_pts::Int=3)
 
     # Convert Clustering.jl result to our format
     labels = zeros(Int, n)
-    n_clusters = length(result)
+    n_clusters = length(result.clusters)
     cluster_sizes = Int[]
     core_pts_all = Int[]
 
-    for (k, cluster) in enumerate(result)
+    for (k, cluster) in enumerate(result.clusters)
         for idx in cluster.core_indices
             labels[idx] = k
             push!(core_pts_all, idx)
@@ -43,7 +43,7 @@ function dbscan(pts::AbstractMatrix; ε::Float64=1.0, min_pts::Int=3)
         for idx in cluster.boundary_indices
             labels[idx] = k
         end
-        push!(cluster_sizes, cluster.size)
+        push!(cluster_sizes, length(cluster.core_indices) + length(cluster.boundary_indices))
     end
 
     n_noise = sum(labels .== 0)

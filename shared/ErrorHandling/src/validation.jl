@@ -42,6 +42,7 @@ function check_weights(w::AbstractVector, n::Int, name::String="weights")
     all(iszero, w) && throw(InputValidationError(
         "at least one weight must be positive",
         name, w))
+    return nothing
 end
 
 """
@@ -53,6 +54,7 @@ function check_positive(x::Real, name::String="parameter")
     x <= 0 && throw(InputValidationError(
         "must be strictly positive",
         name, x))
+    return nothing
 end
 
 """
@@ -64,6 +66,7 @@ function check_nonneg(x::Real, name::String="parameter")
     x < 0 && throw(InputValidationError(
         "must be non-negative",
         name, x))
+    return nothing
 end
 
 """
@@ -75,6 +78,7 @@ function check_probability(p::Real, name::String="probability")
     (p < 0 || p > 1) && throw(InputValidationError(
         "must be in [0, 1]",
         name, p))
+    return nothing
 end
 
 """
@@ -83,12 +87,13 @@ end
 Throw `InputValidationError` unless all entries ∈ [0,1] and sum ≈ 1.
 """
 function check_probability_vector(v::AbstractVector, name::String="probability vector")
-    any(v .< 0) || any(v .> 1) && throw(InputValidationError(
+    (any(v .< 0) || any(v .> 1)) && throw(InputValidationError(
         "all probabilities must be in [0, 1]",
         name, (minimum(v), maximum(v))))
     abs(sum(v) - 1.0) > 1e-8 && throw(InputValidationError(
         "probabilities must sum to 1.0 (got $(round(sum(v); sigdigits=6)))",
         name, sum(v)))
+    return nothing
 end
 
 """
@@ -101,6 +106,7 @@ function check_in_range(x::Real, lo::Real, hi::Real, name::String="parameter")
         "$(name) = $(x) is out of bounds",
         name,
         "[$lo, $hi]"))
+    return nothing
 end
 
 """
@@ -115,6 +121,7 @@ function check_p_le_m(p::Int, m::Int)
     p > m && throw(ConfigurationError(
         "p ($p) exceeds the number of candidate locations ($m)",
         "p", "1..$(m)"))
+    return nothing
 end
 
 """
@@ -142,6 +149,7 @@ function check_square(A::AbstractMatrix, name::String="matrix")
     m, n = size(A)
     m != n && throw(DimensionMismatchError(
         "$(name) must be square", "n × n", "$(m) × $(n)"))
+    return nothing
 end
 
 """
@@ -155,6 +163,7 @@ function check_conformable(A::AbstractMatrix, b::AbstractVector,
         "$(name_A) ($(size(A,1))×$(size(A,2))) is not conformable with $(name_b) ($(length(b)))",
         "A rows = b length",
         "$(size(A,2)) ≠ $(length(b))"))
+    return nothing
 end
 
 """
@@ -167,6 +176,7 @@ function check_same_length(a::AbstractVector, b::AbstractVector,
     length(a) != length(b) && throw(DimensionMismatchError(
         "$(name_a) and $(name_b) must have the same length",
         length(a), length(b)))
+    return nothing
 end
 
 # ─── Macros (zero-overhead syntactic sugar) ───────────────────────────────────
@@ -180,6 +190,7 @@ Example:
 macro validate_dims(cond, msg)
     quote
         $(esc(cond)) || throw(DimensionMismatchError($(esc(msg))))
+        nothing
     end
 end
 
@@ -192,6 +203,7 @@ Example:
 macro validate_finite(arr, name, op)
     quote
         check_finite($(esc(arr)), $(esc(name)), $(esc(op)))
+        nothing
     end
 end
 
@@ -204,6 +216,7 @@ Example:
 macro validate_positive(x, name)
     quote
         check_positive($(esc(x)), $(esc(name)))
+        nothing
     end
 end
 
@@ -216,6 +229,7 @@ Example:
 macro validate_prob(p, name)
     quote
         check_probability($(esc(p)), $(esc(name)))
+        nothing
     end
 end
 
@@ -228,5 +242,6 @@ Example:
 macro validate_in_range(x, lo, hi, name)
     quote
         check_in_range($(esc(x)), $(esc(lo)), $(esc(hi)), $(esc(name)))
+        nothing
     end
 end

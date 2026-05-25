@@ -4,7 +4,7 @@ authors = ["SpatialStats Contributors"]
 version = "0.1.0"
 
 [deps]
-DataFrames = "a93c6f00-e57d-5684-b466-afe8fa294f38"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 GeoDataFrames = "62cb38b5-d8d2-4862-a48e-6a340996859f"
 GeoInterface = "cf35fbd7-0cd7-5166-be24-54bfbe79505f"

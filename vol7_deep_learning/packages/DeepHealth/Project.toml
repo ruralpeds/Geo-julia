@@ -4,7 +4,7 @@ authors = ["Timothy Hartzog"]
 version = "0.1.0"
 
 [deps]
-DataFrames = "a93c6f00-e57d-5684-b466-afe8fa294f15"
+DataFrames = "a93c6f00-e57d-5684-b7b6-d8193f3e46c0"
 Flux = "587475ba-b771-5e3f-ad9e-33799f191a9c"
 LinearAlgebra = "37e2e46d-f89d-539d-b4ee-838fcccc9c8e"
 Optimisers = "3bd65402-5787-11e9-1adc-39752487f4e2"

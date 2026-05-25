@@ -139,13 +139,13 @@ Heuristically classify a failure by scanning the error message string.
 """
 function categorise_failure(msg::String)::FailureCategory
     m = lowercase(msg)
-    occursin("nan", m) || occursin("inf", m)         && return :numerical
+    (occursin("infeasible", m) || occursin("feasib", m)) && return :infeasibility
     occursin("converge", m)                            && return :convergence
-    occursin("dimension", m) || occursin("shape", m)  && return :dimension
-    occursin("infeasible", m) || occursin("feasib", m) && return :infeasibility
-    occursin("≈") || occursin("atol") || occursin("rtol") && return :approximation
-    occursin("exception") || occursin("error:")        && return :exception
-    occursin("false")                                  && return :assertion
+    (occursin("dimension", m) || occursin("shape", m))  && return :dimension
+    (occursin("nan", m) || occursin("inf", m))         && return :numerical
+    (occursin("≈", m) || occursin("atol", m) || occursin("rtol", m)) && return :approximation
+    (occursin("exception", m) || occursin("error:", m))        && return :exception
+    occursin("false", m)                                  && return :assertion
     :unknown
 end
 

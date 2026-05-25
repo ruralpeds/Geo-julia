@@ -30,7 +30,7 @@ Distributions = "31c24e10-a181-5473-b8eb-7969acd0382f"
 
 # Vol 9: Survival, Networks, Time Series
 OrdinaryDiffEq = "1dea7af3-3e70-54e6-95c3-0bf5283fa5ed"
-Survival = "943bc407-6b1d-5cb4-9a3c-90a10f35ad64"
+Survival = "943bc407-731f-561b-85ca-b06253d7198a"
 StateSpaceModels = "99342f36-827c-5390-97c9-d7f9ee765c78"
 
 # Vol 10: Geostatistics
@@ -40,7 +40,7 @@ KernelDensity = "5ab0869b-81aa-558d-bb23-cbf5423bbe9b"
 Clustering = "aaaa29a8-35af-508c-8bc3-b662a17a0fe5"
 
 # Vol 11: Causal Inference
-GLM = "38e38edf-8417-5370-95a0-9cdc8944a806"
+GLM = "38e38edf-8417-5370-95a0-9cbb8c7f171a"
 
 # Vol 12: Optimization
 JuMP = "4076af6c-e467-56ae-b986-b466b2749572"

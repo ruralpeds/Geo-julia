@@ -16,7 +16,7 @@
 #   1  one or more tests failed
 #   2  internal runner error
 
-using Test
+using Test, Printf, Dates
 
 const REPO_ROOT = abspath(joinpath(@__DIR__, ".."))
 
@@ -187,8 +187,9 @@ function run_test_file(entry::NamedTuple, cfg::RunConfig)::TestOutcome
     cfg.verbose && print("  Running $(label) … ")
 
     try
-        # Isolate includes in a fresh anonymous module to avoid name collisions
-        sandbox = Module(Symbol("Sandbox_$(replace(label, '/'=> '_'))"))
+        sandbox = Module(Symbol("Sandbox_$(replace(label, '/'=> '_'))"), true, true)
+        # Define include in the sandbox so it can include other files
+        Core.eval(sandbox, :(include(f) = Base.include($sandbox, f)))
 
         # Redirect stdout/stderr during test run to suppress noise unless verbose
         out_io = cfg.verbose ? stdout : IOBuffer()
@@ -306,12 +307,12 @@ end
 # ─── Console summary ──────────────────────────────────────────────────────────
 
 function print_live_summary(store::ResultStore)
-    s = summary(store)
+    s = TestUtils.summary(store)
     println("═"^72)
-    @printf "  Results: %d passed / %d failed / %d total  (%.0f%% pass rate)\n" \
-        s.passed s.failed s.total (s.pass_rate * 100)
-    @printf "  Assertions: %d run, %d failed\n" s.total_assertions s.total_failures
-    @printf "  Wall time: %.1f s\n" s.elapsed_s
+    @printf("  Results: %d passed / %d failed / %d total  (%.0f%% pass rate)\n",
+        s.passed, s.failed, s.total, (s.pass_rate * 100))
+    @printf("  Assertions: %d run, %d failed\n", s.total_assertions, s.total_failures)
+    @printf("  Wall time: %.1f s\n", s.elapsed_s)
 
     fails = failed_outcomes(store)
     if !isempty(fails)
@@ -339,14 +340,12 @@ function write_report(store::ResultStore, cfg::RunConfig)
     reporter_path = joinpath(REPO_ROOT, "tools", "test_reporter.jl")
     if isfile(reporter_path)
         include(reporter_path)
-        write_debug_report(store, cfg.report_path)
+        Base.invokelatest(write_debug_report, store, cfg.report_path)
         println("\n  Report written to: $(cfg.report_path)")
     end
 end
 
 # ─── Utility ──────────────────────────────────────────────────────────────────
-
-using Printf, Dates
 
 now_str() = Dates.format(now(), "yyyy-mm-dd HH:MM:SS")
 
@@ -357,7 +356,7 @@ function main(args::Vector{String}=ARGS)
     store = run_debug_cycle(cfg)
     write_report(store, cfg)
 
-    n_fail = summary(store).failed
+    n_fail = TestUtils.summary(store).failed
     exit(n_fail > 0 ? 1 : 0)
 end
 

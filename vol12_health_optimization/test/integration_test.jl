@@ -55,7 +55,7 @@ end
 @testset "FacilityLocation — Set Cover" begin
     sc = set_cover(demand_pts, cand_pts; coverage_radius=2.0, weights=pop)
     @test sc.n_facilities >= 1
-    @test sc.total_covered_demand <= sum(pop) + 1e-6
+    @test sc.demand_covered <= sum(pop) + 1e-6
 
     # large radius should require fewer facilities
     sc_large = set_cover(demand_pts, cand_pts; coverage_radius=5.0, weights=pop)
@@ -101,12 +101,9 @@ end
 @testset "HealthRouting — TSP Nearest-Neighbour" begin
     nn = tsp_nn(demand_pts; rng=MersenneTwister(1))
     @test nn.distance > 0
-    @test length(nn.tour) == size(demand_pts, 1) + 1  # returns to start
-    @test nn.tour[1] == nn.tour[end]  # round trip
-
-    # all nodes visited exactly once (excluding depot repeat)
-    inner = nn.tour[1:end-1]
-    @test sort(inner) == 1:size(demand_pts, 1)
+    @test length(nn.tour) == size(demand_pts, 1)
+    @test allunique(nn.tour)
+    @test sort(nn.tour) == 1:size(demand_pts, 1)
 end
 
 @testset "HealthRouting — TSP 2-opt Improvement" begin
@@ -114,8 +111,8 @@ end
     to = tsp_two_opt(demand_pts; init_tour=nn.tour, rng=MersenneTwister(1))
     @test to.distance <= nn.distance + 1e-9
     @test to.improvement >= -1e-9
-    inner = to.tour[1:end-1]
-    @test sort(inner) == 1:size(demand_pts, 1)
+    @test length(to.tour) == size(demand_pts, 1)
+    @test sort(to.tour) == 1:size(demand_pts, 1)
 end
 
 @testset "HealthRouting — VRP Clarke-Wright" begin

@@ -35,7 +35,7 @@ function make_synth_data(T_pre=10, T_post=5, n_donors=8; seed=3, true_effect=2.0
      true_effect=true_effect)
 end
 
-function make_rdd_data(n=300; seed=4, true_tau=5.0, cutoff=0.0)
+function make_rdd_data(; n=300, seed=42, true_tau=1.5, cutoff=0.0)
     rng = MersenneTwister(seed)
     x   = randn(rng, n)
     y   = 2.0 .* x .+ true_tau .* (x .>= cutoff) .+ randn(rng, n)

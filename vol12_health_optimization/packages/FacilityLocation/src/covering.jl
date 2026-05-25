@@ -62,7 +62,7 @@ function set_cover(demand_pts::AbstractMatrix,
         open_set = Int[]
     end
 
-    covered = [any(A[i,j] for j in open_set; init=false) for i in 1:n]
+    covered = [!isempty(open_set) && any(A[i,j] for j in open_set) for i in 1:n]
     w_cov = sum(weights[covered]; init=0.0)
     w_tot = sum(weights)
     SetCoverResult(open_set, covered, length(open_set), sum(covered),
