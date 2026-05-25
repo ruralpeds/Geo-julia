@@ -10,8 +10,14 @@ import axios from 'axios'
 class APIClient {
   constructor(baseURL = 'http://localhost:8080') {
     this.baseURL = baseURL
+    this.timeout = 30000 // 30 seconds default timeout
+    this.retryAttempts = 3
+    this.retryDelay = 1000 // Start with 1 second
+    this.maxRetryDelay = 10000 // Cap at 10 seconds
+
     this.client = axios.create({
       baseURL,
+      timeout: this.timeout,
       headers: {
         'Content-Type': 'application/json'
       }
@@ -23,6 +29,8 @@ class APIClient {
       if (token) {
         config.headers.Authorization = `Bearer ${token}`
       }
+      // Add request timeout
+      config.timeout = this.timeout
       return config
     })
 
@@ -35,33 +43,104 @@ class APIClient {
           localStorage.removeItem('api_token')
           window.location.href = '/login'
         }
+
+        // Enhance error message
+        const originalError = error.response?.data?.message || error.message
+        error.userMessage = this.getUserMessage(error)
+
         return Promise.reject(error)
       }
     )
   }
 
   /**
+   * Get user-friendly error message
+   */
+  getUserMessage(error) {
+    if (error.code === 'ECONNABORTED') {
+      return 'Request timeout - server is not responding. Please try again.'
+    }
+    if (error.code === 'ECONNREFUSED') {
+      return 'Cannot connect to server. Please check if the API is running.'
+    }
+    if (error.response?.status === 400) {
+      return error.response?.data?.message || 'Invalid request parameters'
+    }
+    if (error.response?.status === 401) {
+      return 'Your session has expired. Please log in again.'
+    }
+    if (error.response?.status === 403) {
+      return 'You do not have permission to perform this action'
+    }
+    if (error.response?.status === 404) {
+      return 'Resource not found'
+    }
+    if (error.response?.status === 429) {
+      return 'Too many requests. Please wait a moment and try again.'
+    }
+    if (error.response?.status >= 500) {
+      return 'Server error. Please try again later.'
+    }
+    return error.message || 'An error occurred. Please try again.'
+  }
+
+  /**
+   * Retry logic with exponential backoff
+   */
+  async retryRequest(fn, attempt = 0) {
+    try {
+      return await fn()
+    } catch (error) {
+      // Don't retry for 4xx errors (except timeout)
+      const shouldRetry =
+        attempt < this.retryAttempts &&
+        (error.code === 'ECONNABORTED' || // Timeout
+          error.code === 'ECONNREFUSED' || // Connection refused
+          error.response?.status >= 500) // Server errors
+
+      if (shouldRetry) {
+        const delay = Math.min(
+          this.retryDelay * Math.pow(2, attempt),
+          this.maxRetryDelay
+        )
+        console.warn(
+          `Request failed (attempt ${attempt + 1}/${this.retryAttempts}), retrying in ${delay}ms...`,
+          error.message
+        )
+        await new Promise(resolve => setTimeout(resolve, delay))
+        return this.retryRequest(fn, attempt + 1)
+      }
+
+      throw error
+    }
+  }
+
+  /**
    * Health check endpoint
    */
   async health() {
-    try {
-      const response = await this.client.get('/health')
-      return response.data
-    } catch (error) {
-      throw new Error(`Health check failed: ${error.message}`)
-    }
+    return this.retryRequest(async () => {
+      try {
+        const response = await this.client.get('/health')
+        return response.data
+      } catch (error) {
+        throw new Error(`Health check failed: ${error.userMessage}`)
+      }
+    })
   }
 
   /**
    * Get server status
    */
   async getStatus() {
-    try {
-      const response = await this.client.get('/status')
-      return response.data.data
-    } catch (error) {
-      throw new Error(`Failed to fetch status: ${error.message}`)
-    }
+    return this.retryRequest(async () => {
+      try {
+        const response = await this.client.get('/status')
+        return response.data.data
+      } catch (error) {
+        throw new Error(`Failed to fetch status: ${error.userMessage}`)
+      }
+    })
   }
 
   /**
@@ -77,7 +156,7 @@ class APIClient {
       localStorage.setItem('api_token', token)
       return response.data.data
     } catch (error) {
-      throw new Error(`Login failed: ${error.response?.data?.message || error.message}`)
+      throw new Error(`Login failed: ${error.response?.data?.message || error.userMessage}`)
     }
   }
 
@@ -105,18 +184,20 @@ class APIClient {
   }
 
   /**
-   * Perform synchronous analysis
+   * Perform synchronous analysis (with retry)
    */
   async analyze(operation, params) {
-    try {
-      const response = await this.client.post('/analyze', {
-        operation,
-        params
-      })
-      return response.data.data
-    } catch (error) {
-      throw new Error(`Analysis failed: ${error.response?.data?.message || error.message}`)
-    }
+    return this.retryRequest(async () => {
+      try {
+        const response = await this.client.post('/analyze', {
+          operation,
+          params
+        })
+        return response.data.data
+      } catch (error) {
+        throw new Error(`Analysis failed: ${error.response?.data?.message || error.userMessage}`)
+      }
+    })
   }
 
   /**
@@ -130,20 +211,24 @@ class APIClient {
       })
       return response.data.data
     } catch (error) {
-      throw new Error(`Job submission failed: ${error.response?.data?.message || error.message}`)
+      throw new Error(
+        `Job submission failed: ${error.response?.data?.message || error.userMessage}`
+      )
     }
   }
 
   /**
-   * Get job status and results
+   * Get job status and results (with retry for reliability)
    */
   async getJobStatus(jobId) {
-    try {
-      const response = await this.client.get(`/jobs/${jobId}`)
-      return response.data.data
-    } catch (error) {
-      throw new Error(`Failed to fetch job status: ${error.message}`)
-    }
+    return this.retryRequest(async () => {
+      try {
+        const response = await this.client.get(`/jobs/${jobId}`)
+        return response.data.data
+      } catch (error) {
+        throw new Error(`Failed to fetch job status: ${error.userMessage}`)
+      }
+    })
   }
 
   /**

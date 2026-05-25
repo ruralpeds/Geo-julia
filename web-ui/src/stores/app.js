@@ -11,6 +11,7 @@
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
 import api from '@/api/client'
+import wsManager from '@/api/websocket'
 
 export const useAppStore = defineStore('app', () => {
   // Authentication state
@@ -156,40 +157,75 @@ export const useAppStore = defineStore('app', () => {
   }
 
   async function pollJobStatus(jobId) {
+    // Try WebSocket first, fall back to HTTP polling if unavailable
+    try {
+      // Subscribe to WebSocket updates
+      wsManager.subscribe(
+        jobId,
+        // onUpdate callback
+        (data) => {
+          updateJobStatus(jobId, data)
+        },
+        // onError callback
+        (error) => {
+          console.warn(`WebSocket error for job ${jobId}, falling back to polling:`, error)
+          // Fall back to HTTP polling
+          startHttpPolling(jobId)
+        }
+      )
+    } catch (error) {
+      console.warn('WebSocket not available, using HTTP polling:', error)
+      startHttpPolling(jobId)
+    }
+  }
+
+  function updateJobStatus(jobId, jobStatus) {
+    const jobIndex = activeJobs.value.findIndex(j => j.id === jobId)
+
+    if (jobIndex !== -1) {
+      activeJobs.value[jobIndex] = {
+        ...activeJobs.value[jobIndex],
+        status: jobStatus.status,
+        progress: jobStatus.progress,
+        results: jobStatus.result,
+        error: jobStatus.error
+      }
+
+      jobResults.value[jobId] = jobStatus
+
+      // Handle completion
+      if (jobStatus.status === 'completed') {
+        addNotification(`Job completed: ${jobId.substring(0, 8)}...`, 'success')
+        wsManager.unsubscribe(jobId, () => {}) // Stop listening
+      } else if (jobStatus.status === 'failed') {
+        addNotification(`Job failed: ${jobStatus.error}`, 'error')
+        wsManager.unsubscribe(jobId, () => {}) // Stop listening
+      }
+    }
+  }
+
+  function startHttpPolling(jobId) {
     const maxAttempts = 3600 // 1 hour with 1 second intervals
     let attempts = 0
 
     const poll = async () => {
       try {
         const jobStatus = await api.getJobStatus(jobId)
-        const jobIndex = activeJobs.value.findIndex(j => j.id === jobId)
+        updateJobStatus(jobId, jobStatus)
 
-        if (jobIndex !== -1) {
-          activeJobs.value[jobIndex] = {
-            ...activeJobs.value[jobIndex],
-            status: jobStatus.status,
-            progress: jobStatus.progress,
-            results: jobStatus.result,
-            error: jobStatus.error
+        // Continue polling if still running
+        if (jobStatus.status !== 'completed' && jobStatus.status !== 'failed') {
+          if (attempts < maxAttempts) {
+            attempts++
+            setTimeout(poll, 1000)
           }
-
-          jobResults.value[jobId] = jobStatus
-
-          if (jobStatus.status === 'completed') {
-            addNotification(`Job completed: ${jobId.substring(0, 8)}...`, 'success')
-            return
-          } else if (jobStatus.status === 'failed') {
-            addNotification(`Job failed: ${jobStatus.error}`, 'error')
-            return
-          }
-        }
-
-        if (attempts < maxAttempts) {
-          attempts++
-          setTimeout(poll, 1000)
         }
       } catch (error) {
         console.error('Job polling error:', error)
+        if (attempts < maxAttempts) {
+          attempts++
+          setTimeout(poll, 2000) // Back off on error
+        }
       }
     }
 
@@ -226,9 +262,19 @@ export const useAppStore = defineStore('app', () => {
     sidebarOpen.value = !sidebarOpen.value
   }
 
+  function cleanupWebSocket() {
+    // Disconnect all WebSocket connections on app destroy
+    wsManager.disconnectAll()
+  }
+
   // Initialize app status
   fetchServerStatus()
   const statusInterval = setInterval(fetchServerStatus, 30000) // Every 30 seconds
+
+  // Cleanup on store destroy
+  if (process.env.NODE_ENV === 'production' || typeof window !== 'undefined') {
+    window.addEventListener('beforeunload', cleanupWebSocket)
+  }
 
   return {
     // State
@@ -260,6 +306,9 @@ export const useAppStore = defineStore('app', () => {
     runAnalysis,
     submitAsyncJob,
     pollJobStatus,
+    updateJobStatus,
+    startHttpPolling,
+    cleanupWebSocket,
     addNotification,
     removeNotification,
     clearNotifications,
