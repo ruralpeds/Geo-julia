@@ -45,12 +45,12 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Julia
-      uses: julia-actions/setup-julia@v1
+      uses: julia-actions/setup-julia@v2
       with:
         version: '1.9'
 
     - name: Cache Julia dependencies
-      uses: julia-actions/cache@v1
+      uses: julia-actions/cache@v2
 
     - name: Install dependencies
       run: |
@@ -85,7 +85,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Download current results
-      uses: actions/download-artifact@v3
+      uses: actions/download-artifact@v4
 
     - name: Download baseline
       continue-on-error: true

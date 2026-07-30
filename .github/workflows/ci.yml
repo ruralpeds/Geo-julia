@@ -23,13 +23,13 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Julia ${{ matrix.julia-version }}
-      uses: julia-actions/setup-julia@v1
+      uses: julia-actions/setup-julia@v2
       with:
         version: ${{ matrix.julia-version }}
         arch: x64
 
     - name: Cache Julia dependencies
-      uses: julia-actions/cache@v1
+      uses: julia-actions/cache@v2
 
     - name: Install dependencies
       run: |
@@ -65,7 +65,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Node.js
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v4
       with:
         node-version: '18'
         cache: 'npm'
@@ -123,7 +123,7 @@ jobs:
         sarif_file: 'trivy-results.sarif'
 
     - name: Set up Node.js for npm audit
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v4
       with:
         node-version: '18'
         cache: 'npm'
@@ -154,7 +154,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Node.js
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v4
       with:
         node-version: '18'
         cache: 'npm'
@@ -185,12 +185,12 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Set up Julia
-      uses: julia-actions/setup-julia@v1
+      uses: julia-actions/setup-julia@v2
       with:
         version: '1.9'
 
     - name: Set up Node.js
-      uses: actions/setup-node@v3
+      uses: actions/setup-node@v4
       with:
         node-version: '18'
 
