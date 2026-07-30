@@ -22,6 +22,15 @@
           </button>
           <button
             v-if="appStore.isAuthenticated"
+            @click="appStore.setCurrentPage('map-studio')"
+            :class="appStore.currentPage === 'map-studio' ? 'border-b-2 border-white' : ''"
+            class="nav-item hover:opacity-80 transition flex items-center gap-1"
+          >
+            <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 20l-5.447-2.724A1 1 0 013 16.382V5.618a1 1 0 011.447-.894L9 7m0 13l6-3m-6 3V7m6 10l4.553 2.276A1 1 0 0021 18.382V7.618a1 1 0 00-.553-.894L15 4m0 13V4m0 0L9 7"></path></svg>
+            Map Studio
+          </button>
+          <button
+            v-if="appStore.isAuthenticated"
             @click="appStore.setCurrentPage('analysis')"
             :class="appStore.currentPage === 'analysis' ? 'border-b-2 border-white' : ''"
             class="nav-item hover:opacity-80 transition"
@@ -141,6 +150,9 @@
 
         <!-- Admin Page -->
         <AdminPage v-else-if="appStore.currentPage === 'admin'" />
+
+        <!-- Map Studio Page -->
+        <MapStudioPage v-else-if="appStore.currentPage === 'map-studio'" />
       </main>
     </div>
 
@@ -177,6 +189,7 @@ import AnalysisPage from '@/views/AnalysisPage.vue'
 import JobsPage from '@/views/JobsPage.vue'
 import SettingsPage from '@/views/SettingsPage.vue'
 import AdminPage from '@/views/AdminPage.vue'
+import MapStudioPage from '@/views/MapStudioPage.vue'
 import IngestModal from '@/components/IngestModal.vue'
 import AnalysisModal from '@/components/AnalysisModal.vue'
 import VisualizationModal from '@/components/VisualizationModal.vue'

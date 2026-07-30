@@ -388,7 +388,7 @@
 import { ref, reactive } from 'vue'
 import { useAppStore } from '@/stores/app'
 import api from '@/api/client'
-import { formatDate } from 'date-fns'
+import { format } from 'date-fns'
 
 const appStore = useAppStore()
 

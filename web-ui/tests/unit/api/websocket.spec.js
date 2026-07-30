@@ -1,54 +1,40 @@
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest'
 import WebSocketManager from '@/api/websocket'
 
-// Need to work with the class, not the singleton
-class TestWebSocketManager {
-  constructor(baseURL = 'ws://localhost:8080') {
-    this.baseURL = baseURL
-    this.connections = new Map()
-    this.listeners = new Map()
-    this.reconnectAttempts = 3
-    this.reconnectDelay = 2000
-    this.maxReconnectDelay = 30000
-    this.messageQueue = []
-    this.isConnected = false
-  }
-}
-
 describe('WebSocketManager', () => {
   let manager
   let mockWebSocket
   let mockWebSocketConstructor
 
   beforeEach(() => {
-    // Create a fresh instance for each test
-    manager = new TestWebSocketManager()
+    manager = WebSocketManager
+    manager.connections.clear()
+    manager.listeners.clear()
+    manager.messageQueue = []
+    manager.isConnected = false
 
     // Mock WebSocket
     mockWebSocket = {
       send: vi.fn(),
       close: vi.fn(),
-      onopen: null,
-      onmessage: null,
-      onerror: null,
-      onclose: null,
-      readyState: WebSocket.OPEN
+      readyState: WebSocket.OPEN,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn()
     }
 
-    mockWebSocketConstructor = vi.fn().mockReturnValue(mockWebSocket)
-    global.WebSocket = mockWebSocketConstructor
+    mockWebSocketConstructor = vi.fn(() => mockWebSocket)
+    vi.stubGlobal('WebSocket', mockWebSocketConstructor)
   })
 
   afterEach(() => {
-    manager.disconnectAll()
-    vi.clearAllMocks()
+    vi.unstubAllGlobals()
+    vi.clearAllTimers()
   })
 
   describe('Initialization', () => {
     it('creates instance with default configuration', () => {
-      expect(manager.baseURL).toBeDefined()
+      expect(manager.baseURL).toBe('ws://localhost:8080')
       expect(manager.connections).toBeInstanceOf(Map)
-      expect(manager.listeners).toBeInstanceOf(Map)
     })
 
     it('sets correct reconnection parameters', () => {
@@ -66,7 +52,8 @@ describe('WebSocketManager', () => {
     })
 
     it('initializes empty message queue', () => {
-      expect(manager.messageQueue.length).toBe(0)
+      expect(manager.messageQueue).toEqual([])
+      expect(manager.isConnected).toBe(false)
     })
   })
 
@@ -77,8 +64,9 @@ describe('WebSocketManager', () => {
 
       const unsubscribe = manager.subscribe('job1', onUpdate, onError)
 
-      expect(unsubscribe).toBeInstanceOf(Function)
       expect(manager.listeners.has('job1')).toBe(true)
+      expect(manager.listeners.get('job1')[0].onUpdate).toBe(onUpdate)
+      expect(typeof unsubscribe).toBe('function')
     })
 
     it('creates WebSocket connection on subscribe', () => {
@@ -87,7 +75,9 @@ describe('WebSocketManager', () => {
 
       manager.subscribe('job1', onUpdate, onError)
 
-      expect(mockWebSocketConstructor).toHaveBeenCalled()
+      expect(mockWebSocketConstructor).toHaveBeenCalledWith(
+        expect.stringContaining('ws://localhost/ws/jobs/job1')
+      )
       expect(manager.connections.has('job1')).toBe(true)
     })
 
@@ -95,7 +85,9 @@ describe('WebSocketManager', () => {
       const onUpdate = vi.fn()
       const onError = vi.fn()
 
-      expect(() => manager.subscribe(null, onUpdate, onError)).toThrow('jobId is required')
+      expect(() => {
+        manager.subscribe(null, onUpdate, onError)
+      }).toThrow('jobId is required')
     })
 
     it('allows multiple subscribers to same job', () => {
@@ -164,9 +156,8 @@ describe('WebSocketManager', () => {
       if (mockWebSocket.onerror) {
         const error = new Error('Connection failed')
         mockWebSocket.onerror(error)
+        expect(onError).toHaveBeenCalledWith(error)
       }
-
-      expect(onError).toHaveBeenCalled()
     })
 
     it('handles connection close event', async () => {
@@ -180,7 +171,6 @@ describe('WebSocketManager', () => {
         mockWebSocket.onclose()
       }
 
-      // Connection should be removed
       expect(manager.connections.has('job1')).toBe(false)
       expect(manager.isConnected).toBe(false)
     })

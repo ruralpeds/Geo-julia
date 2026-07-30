@@ -33,19 +33,6 @@ export default defineConfig({
     chunkSizeWarningLimit: 600,
     rollupOptions: {
       output: {
-        // Code splitting strategy
-        manualChunks: {
-          // Core framework
-          'vendor': ['vue', 'pinia'],
-          // Routing
-          'router': ['vue-router'],
-          // Utilities
-          'date-utils': ['date-fns'],
-          'http-client': ['axios'],
-          // Visualization libraries (lazy load)
-          'charts': ['chart.js'],
-          'maps': ['leaflet']
-        },
         // Optimize entry chunk
         entryFileNames: 'js/[name]-[hash].js',
         chunkFileNames: 'js/[name]-[hash].js',
