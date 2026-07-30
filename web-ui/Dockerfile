@@ -7,7 +7,7 @@ WORKDIR /app
 COPY web-ui/package*.json ./
 
 # Install dependencies
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 
 # Copy source code
 COPY web-ui/src ./src

@@ -27,7 +27,7 @@ WORKDIR /app
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
-    libgeos-c1 \
+    libgeos-c1v5 \
     libproj-dev \
     gdal-bin \
     curl \

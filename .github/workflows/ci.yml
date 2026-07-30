@@ -73,7 +73,7 @@ jobs:
 
     - name: Install dependencies
       working-directory: web-ui
-      run: npm ci
+      run: npm ci --legacy-peer-deps
 
     - name: Run linter
       working-directory: web-ui
@@ -162,7 +162,7 @@ jobs:
 
     - name: Install dependencies
       working-directory: web-ui
-      run: npm ci
+      run: npm ci --legacy-peer-deps
 
     - name: Run ESLint for code quality
       working-directory: web-ui
