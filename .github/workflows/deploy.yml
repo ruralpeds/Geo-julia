@@ -57,9 +57,9 @@ jobs:
 
         ssh -i ~/.ssh/deploy_key $DEPLOY_USER@$DEPLOY_HOST << 'ENDSSH'
           cd /app
-          docker-compose pull
-          docker-compose up -d
-          docker-compose exec -T api curl http://localhost:8080/health
+          docker compose pull
+          docker compose up -d
+          docker compose exec -T api curl http://localhost:8080/health
         ENDSSH
 
     - name: Run smoke tests
@@ -134,7 +134,7 @@ jobs:
         # Backup current production
         ssh -i ~/.ssh/deploy_key $DEPLOY_USER@$DEPLOY_HOST << 'ENDSSH'
           cd /app
-          docker-compose exec postgres pg_dump -U geoadmin geospatial | gzip > backups/pre-deploy-$(date +%s).sql.gz
+          docker compose exec postgres pg_dump -U geoadmin geospatial | gzip > backups/pre-deploy-$(date +%s).sql.gz
         ENDSSH
 
         # Deploy new version
@@ -143,12 +143,12 @@ jobs:
 
         ssh -i ~/.ssh/deploy_key $DEPLOY_USER@$DEPLOY_HOST << 'ENDSSH'
           cd /app
-          docker-compose pull
-          docker-compose up -d
+          docker compose pull
+          docker compose up -d
 
           # Wait for services to be healthy
           for i in {1..30}; do
-            if docker-compose exec -T api curl http://localhost:8080/health > /dev/null 2>&1; then
+            if docker compose exec -T api curl http://localhost:8080/health > /dev/null 2>&1; then
               echo "✅ API is healthy"
               break
             fi
@@ -216,8 +216,8 @@ jobs:
           # Restore from backup
           LATEST_BACKUP=$(ls -t backups/pre-deploy-*.sql.gz | head -1)
           if [ -n "$LATEST_BACKUP" ]; then
-            docker-compose exec -T postgres psql -U geoadmin geospatial < <(gunzip -c $LATEST_BACKUP)
-            docker-compose restart
+            docker compose exec -T postgres psql -U geoadmin geospatial < <(gunzip -c $LATEST_BACKUP)
+            docker compose restart
             echo "✅ Rollback completed"
           fi
         ENDSSH

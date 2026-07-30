@@ -69,7 +69,7 @@ jobs:
 
     - name: Upload performance results
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: performance-results-${{ matrix.test-type }}
         path: |
@@ -144,7 +144,7 @@ jobs:
 
     - name: Start services for load testing
       run: |
-        docker-compose -f docker-compose.yml up -d
+        docker compose -f docker-compose.yml up -d
         sleep 10
 
     - name: Install load testing tools
@@ -175,7 +175,7 @@ jobs:
 
     - name: Cleanup
       if: always()
-      run: docker-compose down
+      run: docker compose down
 
   resource-usage:
     name: Monitor Resource Usage
@@ -185,7 +185,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Start services
-      run: docker-compose up -d
+      run: docker compose up -d
 
     - name: Wait for services
       run: sleep 10
@@ -202,4 +202,4 @@ jobs:
 
     - name: Cleanup
       if: always()
-      run: docker-compose down
+      run: docker compose down

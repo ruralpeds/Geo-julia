@@ -112,7 +112,7 @@ jobs:
 
       - name: Upload integration report
         if: always()
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: integration-report
           path: integration_report.txt
@@ -151,7 +151,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload benchmark results
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: benchmark-results
           path: benchmark_results.txt
@@ -203,7 +203,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload formatting report
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: code-format-report
           path: format_report.txt
@@ -240,7 +240,7 @@ jobs:
         continue-on-error: true
 
       - name: Upload documentation
-        uses: actions/upload-artifact@v3
+        uses: actions/upload-artifact@v4
         with:
           name: documentation
           path: docs/build

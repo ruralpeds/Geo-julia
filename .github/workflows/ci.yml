@@ -49,7 +49,7 @@ jobs:
 
     - name: Upload test results
       if: always()
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: api-test-results-julia${{ matrix.julia-version }}
         path: |
@@ -96,7 +96,7 @@ jobs:
         fi
 
     - name: Upload build artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: web-ui-build
         path: web-ui/dist/
@@ -170,7 +170,7 @@ jobs:
       run: npm run lint -- --format json > eslint-report.json || true
 
     - name: Upload code quality report
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: code-quality-report
         path: web-ui/eslint-report.json
