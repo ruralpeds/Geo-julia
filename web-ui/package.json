@@ -14,10 +14,13 @@
   },
   "dependencies": {
     "@deck.gl/json": "^9.3.7",
+    "@vueuse/core": "^14.4.0",
     "axios": "^1.16.0",
     "chart.js": "^4.4.0",
     "date-fns": "^2.30.0",
     "deck.gl": "^9.3.7",
+    "html2canvas": "^1.4.1",
+    "jspdf": "^4.2.1",
     "leaflet": "^1.9.4",
     "mapbox-gl": "^3.27.0",
     "maplibre-gl": "^6.0.0",

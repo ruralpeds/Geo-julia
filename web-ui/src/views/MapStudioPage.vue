@@ -4,6 +4,13 @@
     <div class="w-80 bg-white border-r border-gray-300 flex flex-col h-full z-10 shadow-lg">
       <div class="p-4 border-b border-gray-200 bg-gray-50 flex items-center justify-between">
         <h2 class="text-xl font-bold text-gray-800">Map Studio</h2>
+        <button
+          @click="openPrintLayout"
+          class="p-1.5 text-gray-600 hover:text-blue-600 hover:bg-blue-50 rounded transition"
+          title="Print Layout Designer"
+        >
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 17h2a2 2 0 002-2v-4a2 2 0 00-2-2H5a2 2 0 00-2 2v4a2 2 0 002 2h2m2 4h6a2 2 0 002-2v-4a2 2 0 00-2-2H9a2 2 0 00-2 2v4a2 2 0 002 2zm8-12V5a2 2 0 00-2-2H9a2 2 0 00-2 2v4h10z"></path></svg>
+        </button>
       </div>
 
       <div class="p-4 flex-1 overflow-y-auto">
@@ -116,7 +123,7 @@
     </div>
 
     <!-- Map Container -->
-    <div class="flex-1 relative bg-gray-200">
+    <div class="flex-1 relative bg-gray-200" id="map-container-wrapper">
       <div id="deck-canvas" class="absolute inset-0 w-full h-full"></div>
 
       <!-- Base Map Toggle -->
@@ -153,10 +160,19 @@
       </div>
     </div>
   </div>
+
+  <PrintLayoutModal
+    v-if="showPrintLayout"
+    :map-snapshot-data="mapSnapshot"
+    :legend-data="printLegendData"
+    @close="showPrintLayout = false"
+    @request-snapshot="captureMapSnapshot"
+  />
 </template>
 
 <script setup>
 import { ref, onMounted, onUnmounted, watch, computed } from 'vue'
+import PrintLayoutModal from '@/components/PrintLayoutModal.vue'
 import { useAppStore } from '@/stores/app'
 import { Deck } from '@deck.gl/core'
 import { GeoJsonLayer } from '@deck.gl/layers'
@@ -177,6 +193,84 @@ const selectedDataset = ref('')
 // Computed
 const activeLayer = computed(() => activeLayerIndex.value >= 0 ? layers.value[activeLayerIndex.value] : null)
 const showLegend = computed(() => layers.value.length > 0)
+
+// Print Layout State
+const showPrintLayout = ref(false)
+const mapSnapshot = ref('')
+const printLegendData = ref(null)
+
+const openPrintLayout = () => {
+  showPrintLayout.value = true
+}
+
+const captureMapSnapshot = async () => {
+  if (!deckInstance.value || !mapInstance.value) return
+
+  appStore.addNotification('Capturing map snapshot...', 'info')
+
+  try {
+    // 1. Force deck.gl to render a frame synchronously and preserve drawing buffer
+    deckInstance.value.setProps({
+      glOptions: { preserveDrawingBuffer: true },
+      onAfterRender: () => {
+        // Once deck is rendered, we can capture both
+        setTimeout(() => {
+          try {
+            // Get MapLibre canvas
+            const mapCanvas = mapInstance.value.getCanvas()
+
+            // Get DeckGL canvas
+            const deckCanvas = deckInstance.value.canvas
+
+            // Create a composite canvas
+            const composite = document.createElement('canvas')
+            composite.width = mapCanvas.width
+            composite.height = mapCanvas.height
+            const ctx = composite.getContext('2d')
+
+            // Draw MapLibre first (base map)
+            ctx.drawImage(mapCanvas, 0, 0)
+
+            // Draw Deck.gl over it
+            ctx.drawImage(deckCanvas, 0, 0)
+
+            // Convert to base64 image
+            mapSnapshot.value = composite.toDataURL('image/png')
+
+            // Pass legend data
+            if (activeLayer.value && activeLayer.value.colorProperty) {
+              printLegendData.value = {
+                title: activeLayer.value.name,
+                property: activeLayer.value.colorProperty,
+                colors: [] // Can be populated based on scale
+              }
+            } else {
+              printLegendData.value = null
+            }
+
+            appStore.addNotification('Snapshot ready', 'success')
+
+            // Revert preserveDrawingBuffer to avoid performance hit
+            deckInstance.value.setProps({
+              glOptions: { preserveDrawingBuffer: false }
+            })
+
+          } catch (e) {
+            console.error('Snapshot merge error:', e)
+            appStore.addNotification('Failed to generate snapshot composite', 'error')
+          }
+        }, 100)
+      }
+    })
+
+    // Trigger a redraw
+    deckInstance.value.redraw('force')
+
+  } catch (err) {
+    console.error('Snapshot capture failed:', err)
+    appStore.addNotification('Failed to capture map snapshot', 'error')
+  }
+}
 
 // Mock datasets for now (would come from API)
 const datasets = ref([
@@ -244,7 +338,8 @@ const initMap = () => {
     center: [INITIAL_VIEW_STATE.longitude, INITIAL_VIEW_STATE.latitude],
     zoom: INITIAL_VIEW_STATE.zoom,
     pitch: INITIAL_VIEW_STATE.pitch,
-    bearing: INITIAL_VIEW_STATE.bearing
+    bearing: INITIAL_VIEW_STATE.bearing,
+    preserveDrawingBuffer: true // Required for canvas capture
   })
 
   // Initialize Deck.gl
